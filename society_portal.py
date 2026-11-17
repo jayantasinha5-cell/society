@@ -9,10 +9,8 @@ app = Flask(__name__)
 app.secret_key = os.environ.get("SECRET_KEY", "wb_society_portal_secret_2026")
 
 # ---------------- DIRECT SUPABASE DATABASE CONFIGURATION ---------------- #
-# আপনার Supabase ক্লাউড ডাটাবেস লিংকটি এখানে সরাসরি সেট করা হলো:
 supabase_db_url = "postgresql://postgres.ycmbkusbqpkxcgftzdze:Birpara@123@aws-0-ap-south-1.pooler.supabase.com:6543/postgres"
 
-# যদি Render-এর Environment Variable-এ আলাদা করে DATABASE_URL দেওয়া থাকে সেটি নেবে, না হলে সরাসরি Supabase লিংক কাজ করবে
 db_url = os.environ.get("DATABASE_URL", supabase_db_url)
 if db_url and db_url.startswith("postgres://"):
     db_url = db_url.replace("postgres://", "postgresql://", 1)
