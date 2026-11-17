@@ -8,15 +8,16 @@ from flask_sqlalchemy import SQLAlchemy
 app = Flask(__name__)
 app.secret_key = os.environ.get("SECRET_KEY", "wb_society_portal_secret_2026")
 
-# ---------------- DATABASE CONFIGURATION (SUPABASE / LOCAL SQLITE) ---------------- #
-db_url = os.environ.get("DATABASE_URL")
-if db_url:
-  if db_url.startswith("postgres://"):
-    db_url = db_url.replace("postgres://", "postgresql://", 1)
-  app.config["SQLALCHEMY_DATABASE_URI"] = db_url
-else:
-  app.config["SQLALCHEMY_DATABASE_URI"] = "sqlite:///wb_societies.db"
+# ---------------- DIRECT SUPABASE DATABASE CONFIGURATION ---------------- #
+# আপনার Supabase ক্লাউড ডাটাবেস লিংকটি এখানে সরাসরি সেট করা হলো:
+supabase_db_url = "postgresql://postgres.ycmbkusbqpkxcgftzdze:Birpara@123@aws-0-ap-south-1.pooler.supabase.com:6543/postgres"
 
+# যদি Render-এর Environment Variable-এ আলাদা করে DATABASE_URL দেওয়া থাকে সেটি নেবে, না হলে সরাসরি Supabase লিংক কাজ করবে
+db_url = os.environ.get("DATABASE_URL", supabase_db_url)
+if db_url and db_url.startswith("postgres://"):
+    db_url = db_url.replace("postgres://", "postgresql://", 1)
+
+app.config["SQLALCHEMY_DATABASE_URI"] = db_url
 app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
 db = SQLAlchemy(app)
 
@@ -25,48 +26,48 @@ ADMIN_PASSWORD = os.environ.get("ADMIN_PASS", "admin123")
 
 # ---------------- DATABASE MODEL ---------------- #
 class Society(db.Model):
-  __tablename__ = "wb_societies"
-  id = db.Column(db.Integer, primary_key=True)
-  society_name = db.Column(db.String(200), nullable=False)
-  reg_number = db.Column(db.String(100), unique=True, nullable=False)
-  reg_date = db.Column(db.String(50))
-  address = db.Column(db.Text)
-  pan_number = db.Column(db.String(30))
-  bank_details = db.Column(db.Text)
+    __tablename__ = "wb_societies"
+    id = db.Column(db.Integer, primary_key=True)
+    society_name = db.Column(db.String(200), nullable=False)
+    reg_number = db.Column(db.String(100), unique=True, nullable=False)
+    reg_date = db.Column(db.String(50))
+    address = db.Column(db.Text)
+    pan_number = db.Column(db.String(30))
+    bank_details = db.Column(db.Text)
 
-  president_name = db.Column(db.String(100))
-  president_phone = db.Column(db.String(20))
+    president_name = db.Column(db.String(100))
+    president_phone = db.Column(db.String(20))
 
-  secretary_name = db.Column(db.String(100))
-  secretary_phone = db.Column(db.String(20))
+    secretary_name = db.Column(db.String(100))
+    secretary_phone = db.Column(db.String(20))
 
-  renewed_years = db.Column(db.String(250), default="")
-  last_renewed_fy = db.Column(db.String(50), default="")
-  renewal_status = db.Column(db.String(20), default="Pending")
-  notes = db.Column(db.Text)
-  updated_at = db.Column(db.String(50))
+    renewed_years = db.Column(db.String(250), default="")
+    last_renewed_fy = db.Column(db.String(50), default="")
+    renewal_status = db.Column(db.String(20), default="Pending")
+    notes = db.Column(db.Text)
+    updated_at = db.Column(db.String(50))
 
 
 with app.app_context():
-  db.create_all()
+    db.create_all()
 
 
 # ---------------- HELPER FUNCTIONS ---------------- #
 def clean_phone_for_wa(phone):
-  if not phone:
-    return ""
-  digits = "".join(filter(str.isdigit, str(phone)))
-  if len(digits) == 10:
-    return "91" + digits
-  return digits
+    if not phone:
+        return ""
+    digits = "".join(filter(str.isdigit, str(phone)))
+    if len(digits) == 10:
+        return "91" + digits
+    return digits
 
 
 def get_current_fy():
-  today = date.today()
-  if today.month >= 4:
-    return f"{today.year}-{str(today.year + 1)[-2:]}"
-  else:
-    return f"{today.year - 1}-{str(today.year)[-2:]}"
+    today = date.today()
+    if today.month >= 4:
+        return f"{today.year}-{str(today.year + 1)[-2:]}"
+    else:
+        return f"{today.year - 1}-{str(today.year)[-2:]}"
 
 
 app.jinja_env.globals.update(
@@ -621,246 +622,246 @@ DASHBOARD_HTML = """
 # ---------------- ROUTES ---------------- #
 @app.route("/login", methods=["GET", "POST"])
 def login():
-  if request.method == "POST":
-    if request.form.get("password") == ADMIN_PASSWORD:
-      session["admin_logged_in"] = True
-      return redirect(url_for("dashboard"))
-    else:
-      flash("ভুল পাসওয়ার্ড দিয়েছেন! আবার চেষ্টা করুন।", "danger")
-  return render_template_string(LOGIN_HTML)
+    if request.method == "POST":
+        if request.form.get("password") == ADMIN_PASSWORD:
+            session["admin_logged_in"] = True
+            return redirect(url_for("dashboard"))
+        else:
+            flash("ভুল পাসওয়ার্ড দিয়েছেন! আবার চেষ্টা করুন।", "danger")
+    return render_template_string(LOGIN_HTML)
 
 
 @app.route("/logout")
 def logout():
-  session.pop("admin_logged_in", None)
-  return redirect(url_for("login"))
+    session.pop("admin_logged_in", None)
+    return redirect(url_for("login"))
 
 
 @app.route("/")
 def dashboard():
-  if not session.get("admin_logged_in"):
-    return redirect(url_for("login"))
+    if not session.get("admin_logged_in"):
+        return redirect(url_for("login"))
 
-  all_societies = Society.query.order_by(Society.society_name.asc()).all()
-  pending_list = [s for s in all_societies if s.renewal_status != "Completed"]
-  completed_list = [s for s in all_societies if s.renewal_status == "Completed"]
+    all_societies = Society.query.order_by(Society.society_name.asc()).all()
+    pending_list = [s for s in all_societies if s.renewal_status != "Completed"]
+    completed_list = [s for s in all_societies if s.renewal_status == "Completed"]
 
-  return render_template_string(
-      DASHBOARD_HTML,
-      all_societies=all_societies,
-      pending_list=pending_list,
-      completed_list=completed_list,
-      total_count=len(all_societies),
-  )
+    return render_template_string(
+        DASHBOARD_HTML,
+        all_societies=all_societies,
+        pending_list=pending_list,
+        completed_list=completed_list,
+        total_count=len(all_societies),
+    )
 
 
 @app.route("/bulk_import", methods=["POST"])
 def bulk_import():
-  if not session.get("admin_logged_in"):
-    return redirect(url_for("login"))
-  raw_text = request.form.get("bulk_names", "")
-  lines = [line.strip() for line in raw_text.splitlines() if line.strip()]
-  added_count = 0
-  for idx, line in enumerate(lines, start=1):
-    if not Society.query.filter_by(society_name=line).first():
-      temp_reg = f"PENDING-REG-{datetime.now().strftime('%H%M%S')}-{idx}"
-      new_soc = Society(
-          society_name=line,
-          reg_number=temp_reg,
-          renewal_status="Pending",
-          updated_at=datetime.now().strftime("%Y-%m-%d"),
-      )
-      db.session.add(new_soc)
-      added_count += 1
-  db.session.commit()
-  flash(
-      f"মোট {added_count}টি নতুন সোসাইটি সফলভাবে ডাটাবেসে যুক্ত হয়েছে!",
-      "success",
-  )
-  return redirect(url_for("dashboard"))
+    if not session.get("admin_logged_in"):
+        return redirect(url_for("login"))
+    raw_text = request.form.get("bulk_names", "")
+    lines = [line.strip() for line in raw_text.splitlines() if line.strip()]
+    added_count = 0
+    for idx, line in enumerate(lines, start=1):
+        if not Society.query.filter_by(society_name=line).first():
+            temp_reg = f"PENDING-REG-{datetime.now().strftime('%H%M%S')}-{idx}"
+            new_soc = Society(
+                society_name=line,
+                reg_number=temp_reg,
+                renewal_status="Pending",
+                updated_at=datetime.now().strftime("%Y-%m-%d"),
+            )
+            db.session.add(new_soc)
+            added_count += 1
+    db.session.commit()
+    flash(
+        f"মোট {added_count}টি নতুন সোসাইটি সফলভাবে ক্লাউড ডাটাবেসে যুক্ত হয়েছে!",
+        "success",
+    )
+    return redirect(url_for("dashboard"))
 
 
 @app.route("/export_excel")
 def export_excel():
-  if not session.get("admin_logged_in"):
-    return redirect(url_for("login"))
+    if not session.get("admin_logged_in"):
+        return redirect(url_for("login"))
 
-  si = StringIO()
-  cw = csv.writer(si)
+    si = StringIO()
+    cw = csv.writer(si)
 
-  # Excel Headers
-  cw.writerow([
-      "ID",
-      "Society Name",
-      "Registration Number",
-      "Registration Date",
-      "PAN Number",
-      "Bank Details",
-      "Registered Address",
-      "President Name",
-      "President Phone",
-      "Secretary Name",
-      "Secretary Phone",
-      "Renewal Status",
-      "Last Renewed FY",
-      "All Renewed Years History",
-  ])
-
-  societies = Society.query.order_by(Society.society_name.asc()).all()
-  for s in societies:
+    # Excel Headers
     cw.writerow([
-        s.id,
-        s.society_name,
-        s.reg_number,
-        s.reg_date or "",
-        s.pan_number or "",
-        s.bank_details or "",
-        s.address or "",
-        s.president_name or "",
-        s.president_phone or "",
-        s.secretary_name or "",
-        s.secretary_phone or "",
-        s.renewal_status,
-        s.last_renewed_fy or "",
-        s.renewed_years or "",
+        "ID",
+        "Society Name",
+        "Registration Number",
+        "Registration Date",
+        "PAN Number",
+        "Bank Details",
+        "Registered Address",
+        "President Name",
+        "President Phone",
+        "Secretary Name",
+        "Secretary Phone",
+        "Renewal Status",
+        "Last Renewed FY",
+        "All Renewed Years History",
     ])
 
-  output = make_response(si.getvalue().encode("utf-8-sig"))
-  output.headers["Content-Disposition"] = (
-      "attachment; filename=WB_Societies_Renewal_Report.csv"
-  )
-  output.headers["Content-type"] = "text/csv; charset=utf-8-sig"
-  return output
+    societies = Society.query.order_by(Society.society_name.asc()).all()
+    for s in societies:
+        cw.writerow([
+            s.id,
+            s.society_name,
+            s.reg_number,
+            s.reg_date or "",
+            s.pan_number or "",
+            s.bank_details or "",
+            s.address or "",
+            s.president_name or "",
+            s.president_phone or "",
+            s.secretary_name or "",
+            s.secretary_phone or "",
+            s.renewal_status,
+            s.last_renewed_fy or "",
+            s.renewed_years or "",
+        ])
+
+    output = make_response(si.getvalue().encode("utf-8-sig"))
+    output.headers["Content-Disposition"] = (
+        "attachment; filename=WB_Societies_Renewal_Report.csv"
+    )
+    output.headers["Content-type"] = "text/csv; charset=utf-8-sig"
+    return output
 
 
 @app.route("/add_society", methods=["POST"])
 def add_society():
-  if not session.get("admin_logged_in"):
-    return redirect(url_for("login"))
-  try:
-    renewed_yrs = request.form.get("renewed_years", "").strip()
-    last_fy = (
-        renewed_yrs.split(",")[-1].strip() if renewed_yrs else get_current_fy()
-    )
+    if not session.get("admin_logged_in"):
+        return redirect(url_for("login"))
+    try:
+        renewed_yrs = request.form.get("renewed_years", "").strip()
+        last_fy = (
+            renewed_yrs.split(",")[-1].strip() if renewed_yrs else get_current_fy()
+        )
 
-    new_soc = Society(
-        society_name=request.form.get("society_name").strip(),
-        reg_number=request.form.get("reg_number").strip(),
-        reg_date=request.form.get("reg_date", "").strip(),
-        pan_number=request.form.get("pan_number", "").strip().upper(),
-        bank_details=request.form.get("bank_details", "").strip(),
-        address=request.form.get("address", "").strip(),
-        president_name=request.form.get("president_name", "").strip(),
-        president_phone=request.form.get("president_phone", "").strip(),
-        secretary_name=request.form.get("secretary_name", "").strip(),
-        secretary_phone=request.form.get("secretary_phone", "").strip(),
-        renewed_years=renewed_yrs,
-        last_renewed_fy=last_fy if renewed_yrs else "",
-        renewal_status=request.form.get("renewal_status", "Pending"),
-        updated_at=datetime.now().strftime("%Y-%m-%d"),
-    )
-    db.session.add(new_soc)
-    db.session.commit()
-    flash(
-        f"'{new_soc.society_name}' সফলভাবে ডাটাবেসে সেভ হয়েছে!",
-        "success",
-    )
-  except Exception as e:
-    db.session.rollback()
-    flash(
-        "এই Registration Number ইতিমধ্যে ডাটাবেসে আছে অথবা কোনো সমস্যা হয়েছে!",
-        "danger",
-    )
-  return redirect(url_for("dashboard"))
+        new_soc = Society(
+            society_name=request.form.get("society_name").strip(),
+            reg_number=request.form.get("reg_number").strip(),
+            reg_date=request.form.get("reg_date", "").strip(),
+            pan_number=request.form.get("pan_number", "").strip().upper(),
+            bank_details=request.form.get("bank_details", "").strip(),
+            address=request.form.get("address", "").strip(),
+            president_name=request.form.get("president_name", "").strip(),
+            president_phone=request.form.get("president_phone", "").strip(),
+            secretary_name=request.form.get("secretary_name", "").strip(),
+            secretary_phone=request.form.get("secretary_phone", "").strip(),
+            renewed_years=renewed_yrs,
+            last_renewed_fy=last_fy if renewed_yrs else "",
+            renewal_status=request.form.get("renewal_status", "Pending"),
+            updated_at=datetime.now().strftime("%Y-%m-%d"),
+        )
+        db.session.add(new_soc)
+        db.session.commit()
+        flash(
+            f"'{new_soc.society_name}' সফলভাবে ক্লাউড ডাটাবেসে সেভ হয়েছে!",
+            "success",
+        )
+    except Exception as e:
+        db.session.rollback()
+        flash(
+            "এই Registration Number ইতিমধ্যে ডাটাবেসে আছে অথবা কোনো সমস্যা হয়েছে!",
+            "danger",
+        )
+    return redirect(url_for("dashboard"))
 
 
 @app.route("/edit/<int:id>", methods=["POST"])
 def edit_society(id):
-  if not session.get("admin_logged_in"):
-    return redirect(url_for("login"))
-  soc = Society.query.get_or_404(id)
-  try:
-    soc.society_name = request.form.get("society_name").strip()
-    soc.reg_number = request.form.get("reg_number").strip()
-    soc.reg_date = request.form.get("reg_date", "").strip()
-    soc.pan_number = request.form.get("pan_number", "").strip().upper()
-    soc.bank_details = request.form.get("bank_details", "").strip()
-    soc.address = request.form.get("address", "").strip()
-    soc.president_name = request.form.get("president_name", "").strip()
-    soc.president_phone = request.form.get("president_phone", "").strip()
-    soc.secretary_name = request.form.get("secretary_name", "").strip()
-    soc.secretary_phone = request.form.get("secretary_phone", "").strip()
-    soc.renewed_years = request.form.get("renewed_years", "").strip()
-    soc.renewal_status = request.form.get("renewal_status", "Pending")
-    if soc.renewed_years:
-      soc.last_renewed_fy = soc.renewed_years.split(",")[-1].strip()
-    db.session.commit()
-    flash("তথ্য সফলভাবে আপডেট করা হয়েছে!", "success")
-  except Exception as e:
-    db.session.rollback()
-    flash("আপডেট করার সময় সমস্যা হয়েছে!", "danger")
-  return redirect(url_for("dashboard"))
+    if not session.get("admin_logged_in"):
+        return redirect(url_for("login"))
+    soc = Society.query.get_or_404(id)
+    try:
+        soc.society_name = request.form.get("society_name").strip()
+        soc.reg_number = request.form.get("reg_number").strip()
+        soc.reg_date = request.form.get("reg_date", "").strip()
+        soc.pan_number = request.form.get("pan_number", "").strip().upper()
+        soc.bank_details = request.form.get("bank_details", "").strip()
+        soc.address = request.form.get("address", "").strip()
+        soc.president_name = request.form.get("president_name", "").strip()
+        soc.president_phone = request.form.get("president_phone", "").strip()
+        soc.secretary_name = request.form.get("secretary_name", "").strip()
+        soc.secretary_phone = request.form.get("secretary_phone", "").strip()
+        soc.renewed_years = request.form.get("renewed_years", "").strip()
+        soc.renewal_status = request.form.get("renewal_status", "Pending")
+        if soc.renewed_years:
+            soc.last_renewed_fy = soc.renewed_years.split(",")[-1].strip()
+        db.session.commit()
+        flash("তথ্য সফলভাবে আপডেট করা হয়েছে!", "success")
+    except Exception as e:
+        db.session.rollback()
+        flash("আপডেট করার সময় সমস্যা হয়েছে!", "danger")
+    return redirect(url_for("dashboard"))
 
 
 @app.route("/mark_complete/<int:id>", methods=["POST"])
 def mark_complete(id):
-  if not session.get("admin_logged_in"):
-    return redirect(url_for("login"))
-  soc = Society.query.get_or_404(id)
-  fy = request.form.get("completed_fy", "").strip()
+    if not session.get("admin_logged_in"):
+        return redirect(url_for("login"))
+    soc = Society.query.get_or_404(id)
+    fy = request.form.get("completed_fy", "").strip()
 
-  existing = [y.strip() for y in soc.renewed_years.split(",") if y.strip()]
-  if fy and fy not in existing:
-    existing.append(fy)
+    existing = [y.strip() for y in soc.renewed_years.split(",") if y.strip()]
+    if fy and fy not in existing:
+        existing.append(fy)
 
-  soc.renewed_years = ", ".join(existing)
-  soc.last_renewed_fy = fy
-  soc.renewal_status = "Completed"
-  db.session.commit()
-  flash(
-      f"'{soc.society_name}'-এর {fy} রিনিউয়াল Completed হিসেবে সেভ হয়েছে!",
-      "success",
-  )
-  return redirect(url_for("dashboard"))
+    soc.renewed_years = ", ".join(existing)
+    soc.last_renewed_fy = fy
+    soc.renewal_status = "Completed"
+    db.session.commit()
+    flash(
+        f"'{soc.society_name}'-এর {fy} রিনিউয়াল Completed হিসেবে সেভ হয়েছে!",
+        "success",
+    )
+    return redirect(url_for("dashboard"))
 
 
 @app.route("/mark_pending/<int:id>")
 def mark_pending(id):
-  if not session.get("admin_logged_in"):
-    return redirect(url_for("login"))
-  soc = Society.query.get_or_404(id)
-  soc.renewal_status = "Pending"
-  db.session.commit()
-  flash(
-      f"'{soc.society_name}'-কে আবার Pending তালিকায় নেওয়া হয়েছে।",
-      "warning",
-  )
-  return redirect(url_for("dashboard"))
+    if not session.get("admin_logged_in"):
+        return redirect(url_for("login"))
+    soc = Society.query.get_or_404(id)
+    soc.renewal_status = "Pending"
+    db.session.commit()
+    flash(
+        f"'{soc.society_name}'-কে আবার Pending তালিকায় নেওয়া হয়েছে।",
+        "warning",
+    )
+    return redirect(url_for("dashboard"))
 
 
 @app.route("/reset_all_pending")
 def reset_all_pending():
-  if not session.get("admin_logged_in"):
-    return redirect(url_for("login"))
-  Society.query.update({Society.renewal_status: "Pending"})
-  db.session.commit()
-  flash(
-      "নতুন আর্থিক বছরের (After March) রিনিউয়াল সাইকেল শুরু হয়েছে—সব সোসাইটি এখন Pending লিস্টে!",
-      "info",
-  )
-  return redirect(url_for("dashboard"))
+    if not session.get("admin_logged_in"):
+        return redirect(url_for("login"))
+    Society.query.update({Society.renewal_status: "Pending"})
+    db.session.commit()
+    flash(
+        "নতুন আর্থিক বছরের (After March) রিনিউয়াল সাইকেল শুরু হয়েছে—সব সোসাইটি এখন Pending লিস্টে!",
+        "info",
+    )
+    return redirect(url_for("dashboard"))
 
 
 @app.route("/delete/<int:id>")
 def delete_society(id):
-  if not session.get("admin_logged_in"):
-    return redirect(url_for("login"))
-  soc = Society.query.get_or_404(id)
-  db.session.delete(soc)
-  db.session.commit()
-  flash("সোসাইটি রেকর্ড ডিলিট করা হয়েছে।", "secondary")
-  return redirect(url_for("dashboard"))
+    if not session.get("admin_logged_in"):
+        return redirect(url_for("login"))
+    soc = Society.query.get_or_404(id)
+    db.session.delete(soc)
+    db.session.commit()
+    flash("সোসাইটি রেকর্ড ডিলিট করা হয়েছে।", "secondary")
+    return redirect(url_for("dashboard"))
 
 
 if __name__ == "__main__":
-  app.run(host="0.0.0.0", port=5005, debug=True)
+    app.run(host="0.0.0.0", port=5005, debug=True)
