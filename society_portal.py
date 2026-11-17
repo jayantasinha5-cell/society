@@ -653,29 +653,33 @@ def dashboard():
     )
 
 
+import uuid
+
 @app.route("/bulk_import", methods=["POST"])
 def bulk_import():
     if not session.get("admin_logged_in"):
         return redirect(url_for("login"))
-    raw_text = request.form.get("bulk_names", "")
-    lines = [line.strip() for line in raw_text.splitlines() if line.strip()]
-    added_count = 0
-    for idx, line in enumerate(lines, start=1):
-        if not Society.query.filter_by(society_name=line).first():
-            temp_reg = f"PENDING-REG-{datetime.now().strftime('%H%M%S')}-{idx}"
-            new_soc = Society(
-                society_name=line,
-                reg_number=temp_reg,
-                renewal_status="Pending",
-                updated_at=datetime.now().strftime("%Y-%m-%d"),
-            )
-            db.session.add(new_soc)
-            added_count += 1
-    db.session.commit()
-    flash(
-        f"মোট {added_count}টি নতুন সোসাইটি সফলভাবে ক্লাউড ডাটাবেসে যুক্ত হয়েছে!",
-        "success",
-    )
+    try:
+        raw_text = request.form.get("bulk_names", "")
+        lines = [line.strip() for line in raw_text.splitlines() if line.strip()]
+        added_count = 0
+        for line in lines:
+            if not Society.query.filter_by(society_name=line).first():
+                unique_code = uuid.uuid4().hex[:6].upper()
+                temp_reg = f"PENDING-{unique_code}"
+                new_soc = Society(
+                    society_name=line,
+                    reg_number=temp_reg,
+                    renewal_status="Pending",
+                    updated_at=datetime.now().strftime("%Y-%m-%d"),
+                )
+                db.session.add(new_soc)
+                added_count += 1
+        db.session.commit()
+        flash(f"মোট {added_count}টি নতুন সোসাইটি সফলভাবে সেভ হয়েছে!", "success")
+    except Exception as e:
+        db.session.rollback()
+        flash(f"ইমপোর্ট করার সময় সমস্যা হয়েছে: {str(e)}", "danger")
     return redirect(url_for("dashboard"))
 
 
