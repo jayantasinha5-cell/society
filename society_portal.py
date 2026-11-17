@@ -9,7 +9,7 @@ app = Flask(__name__)
 app.secret_key = os.environ.get("SECRET_KEY", "wb_society_portal_secret_2026")
 
 # ---------------- DIRECT SUPABASE DATABASE CONFIGURATION ---------------- #
-supabase_db_url = "postgresql://postgres.ycmbkusbqpkxcgftzdze:Birpara%40123@aws-0-ap-south-1.pooler.supabase.com:6543/postgres"
+supabase_db_url = "postgresql://postgres.ycmbkusbqpkxcgftzdze:Birpara@123@aws-0-ap-south-1.pooler.supabase.com:6543/postgres"
 
 db_url = os.environ.get("DATABASE_URL", supabase_db_url)
 if db_url and db_url.startswith("postgres://"):
