@@ -618,43 +618,6 @@ DASHBOARD_HTML = """
 
 
 # ---------------- ROUTES ---------------- #
-@app.route("/login", methods=["GET", "POST"])
-def login():
-    if request.method == "POST":
-        if request.form.get("password") == ADMIN_PASSWORD:
-            session["admin_logged_in"] = True
-            return redirect(url_for("dashboard"))
-        else:
-            flash("ভুল পাসওয়ার্ড দিয়েছেন! আবার চেষ্টা করুন।", "danger")
-    return render_template_string(LOGIN_HTML)
-
-
-@app.route("/logout")
-def logout():
-    session.pop("admin_logged_in", None)
-    return redirect(url_for("login"))
-
-
-@app.route("/")
-def dashboard():
-    if not session.get("admin_logged_in"):
-        return redirect(url_for("login"))
-
-    all_societies = Society.query.order_by(Society.society_name.asc()).all()
-    pending_list = [s for s in all_societies if s.renewal_status != "Completed"]
-    completed_list = [s for s in all_societies if s.renewal_status == "Completed"]
-
-    return render_template_string(
-        DASHBOARD_HTML,
-        all_societies=all_societies,
-        pending_list=pending_list,
-        completed_list=completed_list,
-        total_count=len(all_societies),
-    )
-
-
-import uuid
-
 @app.route("/bulk_import", methods=["POST"])
 def bulk_import():
     if not session.get("admin_logged_in"):
@@ -663,25 +626,39 @@ def bulk_import():
         raw_text = request.form.get("bulk_names", "")
         lines = [line.strip() for line in raw_text.splitlines() if line.strip()]
         added_count = 0
-        for line in lines:
-            if not Society.query.filter_by(society_name=line).first():
+        
+        for idx, line in enumerate(lines, start=1):
+            # স্ল্যাশ বা স্পেশাল ক্যারেক্টার ক্লিন করা
+            clean_name = line.replace("\\", " ").replace("/", " ").strip()
+            if not clean_name:
+                continue
+                
+            # চেক করা যে নামটা আগে থেকেই ডাটাবেসে আছে কি না
+            existing = Society.query.filter_by(society_name=clean_name).first()
+            if not existing:
                 unique_code = uuid.uuid4().hex[:6].upper()
-                temp_reg = f"PENDING-{unique_code}"
+                temp_reg = f"REG-{datetime.now().strftime('%H%M%S')}-{idx}-{unique_code}"
+                
                 new_soc = Society(
-                    society_name=line,
+                    society_name=clean_name,
                     reg_number=temp_reg,
                     renewal_status="Pending",
                     updated_at=datetime.now().strftime("%Y-%m-%d"),
                 )
                 db.session.add(new_soc)
                 added_count += 1
+                
         db.session.commit()
-        flash(f"মোট {added_count}টি নতুন সোসাইটি সফলভাবে সেভ হয়েছে!", "success")
+        if added_count > 0:
+            flash(f"মোট {added_count}টি নতুন সোসাইটি সফলভাবে ইমপোর্ট হয়েছে!", "success")
+        else:
+            flash("যে নামগুলো দিয়েছেন সেগুলো ইতিমধ্যে ডাটাবেসে ছিল অথবা খালি ছিল।", "warning")
+            
     except Exception as e:
         db.session.rollback()
-        flash(f"ইমপোর্ট করার সময় সমস্যা হয়েছে: {str(e)}", "danger")
+        flash(f"ইমপোর্ট করার সময় ডাটাবেসে সমস্যা হয়েছে: {str(e)}", "danger")
+        
     return redirect(url_for("dashboard"))
-
 
 @app.route("/export_excel")
 def export_excel():
