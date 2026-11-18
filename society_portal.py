@@ -2,6 +2,7 @@ from datetime import date, datetime
 import os
 import csv
 from io import StringIO
+import uuid
 from flask import Flask, flash, redirect, render_template_string, request, session, url_for, make_response
 from flask_sqlalchemy import SQLAlchemy
 
@@ -9,7 +10,7 @@ app = Flask(__name__)
 app.secret_key = os.environ.get("SECRET_KEY", "wb_society_portal_secret_2026")
 
 # ---------------- DIRECT SUPABASE DATABASE CONFIGURATION ---------------- #
-supabase_db_url = "postgresql://postgres.ycmbkusbqpkxcgftzdze:Birpara123@aws-0-ap-south-1.pooler.supabase.com:6543/postgres"
+supabase_db_url = "postgresql://postgres.ycmbkusbqpkxcgftzdze:Y7J3NAIePBuJHnee%2E@aws-0-ap-south-1.pooler.supabase.com:6543/postgres"
 
 db_url = os.environ.get("DATABASE_URL", supabase_db_url)
 if db_url and db_url.startswith("postgres://"):
@@ -152,7 +153,7 @@ DASHBOARD_HTML = """
             <a href="/export_excel" class="btn btn-success btn-sm fw-bold">
                 <i class="fa-solid fa-file-excel me-1"></i> Export Excel
             </a>
-            <a href="/reset_all_pending" onclick="return confirm('আপনি কি নতুন আর্থিক বছরের (After March) জন্য সব সোসাইটিকে একসাথে Pending লিস্টে নিয়ে আসতে চান?')" class="btn btn-outline-light btn-sm" title="Start New Renewal Cycle">
+            <a href="/reset_all_pending" onclick="return confirm('আপনি কি নতুন আর্থিক বছরের (After March) জন্য সব সোসাইটিকে একসাথে Pending লিস্টে নিয়ে আসতে চান?')" class="btn btn-outline-light btn-sm" title="Start New Renewal Cycle">
                 <i class="fa-solid fa-rotate"></i> New Year Cycle
             </a>
             <a href="/logout" class="btn btn-danger btn-sm"><i class="fa-solid fa-right-from-bracket"></i></a>
@@ -518,9 +519,9 @@ DASHBOARD_HTML = """
                 <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
             </div>
             <div class="modal-body">
-                <label class="form-label small fw-bold">প্রতি লাইনে একটি করে সোসাইটির নাম পেস্ট করুন:</label>
+                <label class="form-label small fw-bold">প্রতি লাইনে একটি করে সোসাইটির নাম পেস্ট করুন (সর্বোচ্চ ৪০-৫০টি করে দিন):</label>
                 <textarea name="bulk_names" class="form-control" rows="8" placeholder="Birpara Jubilee Club&#10;Laxmi Welfare Society&#10;..." required></textarea>
-                <small class="text-muted d-block mt-2">আপাতত অস্থায়ী রেজিস্ট্রেশন নম্বর দিয়ে সেভ হবে, পরে আপনি প্রতিটি কার্ডের <strong>Edit Details</strong> থেকে আসল রেজিস্ট্রেশন নম্বর, PAN ও ফোন নম্বর বসিয়ে নিতে পারবেন।</small>
+                <small class="text-muted d-block mt-2">সার্ভার টাইম-আউট এড়াতে একবারে ৪০-৫০টি করে নাম দিয়ে Import All করুন।</small>
             </div>
             <div class="modal-footer">
                 <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
@@ -618,6 +619,41 @@ DASHBOARD_HTML = """
 
 
 # ---------------- ROUTES ---------------- #
+@app.route("/login", methods=["GET", "POST"])
+def login():
+    if request.method == "POST":
+        if request.form.get("password") == ADMIN_PASSWORD:
+            session["admin_logged_in"] = True
+            return redirect(url_for("dashboard"))
+        else:
+            flash("ভুল পাসওয়ার্ড দিয়েছেন! আবার চেষ্টা করুন।", "danger")
+    return render_template_string(LOGIN_HTML)
+
+
+@app.route("/logout")
+def logout():
+    session.pop("admin_logged_in", None)
+    return redirect(url_for("login"))
+
+
+@app.route("/")
+def dashboard():
+    if not session.get("admin_logged_in"):
+        return redirect(url_for("login"))
+
+    all_societies = Society.query.order_by(Society.society_name.asc()).all()
+    pending_list = [s for s in all_societies if s.renewal_status != "Completed"]
+    completed_list = [s for s in all_societies if s.renewal_status == "Completed"]
+
+    return render_template_string(
+        DASHBOARD_HTML,
+        all_societies=all_societies,
+        pending_list=pending_list,
+        completed_list=completed_list,
+        total_count=len(all_societies),
+    )
+
+
 @app.route("/bulk_import", methods=["POST"])
 def bulk_import():
     if not session.get("admin_logged_in"):
@@ -627,13 +663,14 @@ def bulk_import():
         lines = [line.strip() for line in raw_text.splitlines() if line.strip()]
         added_count = 0
         
-        for idx, line in enumerate(lines, start=1):
-            # স্ল্যাশ বা স্পেশাল ক্যারেক্টার ক্লিন করা
+        # ব্যাচ সাইজ সর্বোচ্চ ৫০টি করা হয়েছে যাতে 502 Bad Gateway এরর না আসে
+        batch_lines = lines[:50]
+        
+        for idx, line in enumerate(batch_lines, start=1):
             clean_name = line.replace("\\", " ").replace("/", " ").strip()
             if not clean_name:
                 continue
                 
-            # চেক করা যে নামটা আগে থেকেই ডাটাবেসে আছে কি না
             existing = Society.query.filter_by(society_name=clean_name).first()
             if not existing:
                 unique_code = uuid.uuid4().hex[:6].upper()
@@ -650,15 +687,16 @@ def bulk_import():
                 
         db.session.commit()
         if added_count > 0:
-            flash(f"মোট {added_count}টি নতুন সোসাইটি সফলভাবে ইমপোর্ট হয়েছে!", "success")
+            flash(f"মোট {added_count}টি সোসাইটি সফলভাবে ইমপোর্ট হয়েছে! (বাকি থাকলে আবার ইমপোর্ট করুন)", "success")
         else:
-            flash("যে নামগুলো দিয়েছেন সেগুলো ইতিমধ্যে ডাটাবেসে ছিল অথবা খালি ছিল।", "warning")
+            flash("যে নামগুলো দিয়েছেন সেগুলো ইতিমধ্যে ডাটাবেসে আছে অথবা খালি ছিল।", "warning")
             
     except Exception as e:
         db.session.rollback()
         flash(f"ইমপোর্ট করার সময় ডাটাবেসে সমস্যা হয়েছে: {str(e)}", "danger")
         
     return redirect(url_for("dashboard"))
+
 
 @app.route("/export_excel")
 def export_excel():
@@ -668,7 +706,6 @@ def export_excel():
     si = StringIO()
     cw = csv.writer(si)
 
-    # Excel Headers
     cw.writerow([
         "ID",
         "Society Name",
