@@ -1,883 +1,845 @@
 from datetime import date, datetime
 import os
-import csv
-from io import StringIO
-import uuid
-from flask import Flask, flash, redirect, render_template_string, request, session, url_for, make_response
+from flask import Flask, flash, redirect, render_template_string, request, session, url_for
 from flask_sqlalchemy import SQLAlchemy
 
 app = Flask(__name__)
-app.secret_key = os.environ.get("SECRET_KEY", "wb_society_portal_secret_2026")
+app.secret_key = "cab_pro_secret_key"
 
-# ---------------- DIRECT SUPABASE DATABASE CONFIGURATION ---------------- #
-supabase_db_url = "postgresql://postgres.ycmbkusbqpkxcgftzdze:Y7J3NAIePBuJHnee%2E@aws-0-ap-south-1.pooler.supabase.com:6543/postgres"
-
-db_url = os.environ.get("DATABASE_URL", supabase_db_url)
-if db_url and db_url.startswith("postgres://"):
-    db_url = db_url.replace("postgres://", "postgresql://", 1)
-
-app.config["SQLALCHEMY_DATABASE_URI"] = db_url
+# ---------------- SUPABASE POSTGRESQL CONFIGURATION ---------------- #
+app.config["SQLALCHEMY_DATABASE_URI"] = os.environ.get(
+    "DATABASE_URL",
+    "postgresql://postgres.fjfffxaxyrgejulcyag:YOUR_PASSWORD@aws-0-ap-south-1.pooler.supabase.com:6543/postgres",
+)
 app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
+
 db = SQLAlchemy(app)
 
-ADMIN_PASSWORD = os.environ.get("ADMIN_PASS", "admin123")
+CAR_FOLDER = "static/cars"
+os.makedirs(CAR_FOLDER, exist_ok=True)
 
 
-# ---------------- DATABASE MODEL ---------------- #
-class Society(db.Model):
-    __tablename__ = "wb_societies"
+# ---------------- DATABASE MODELS ---------------- #
+class Car(db.Model):
+    __tablename__ = "cars"
     id = db.Column(db.Integer, primary_key=True)
-    society_name = db.Column(db.String(200), nullable=False)
-    reg_number = db.Column(db.String(100), unique=True, nullable=False)
-    reg_date = db.Column(db.String(50))
-    address = db.Column(db.Text)
-    pan_number = db.Column(db.String(30))
-    bank_details = db.Column(db.Text)
+    car_name = db.Column(db.String(100), nullable=False)
+    car_type = db.Column(db.String(50), nullable=False)
+    vehicle_number = db.Column(db.String(50), unique=True, nullable=False)
+    owner_name = db.Column(db.String(100), nullable=False)
+    phone = db.Column(db.String(20), nullable=False)
+    rate_per_day = db.Column(db.String(50), nullable=False)
+    location = db.Column(db.String(100), nullable=False)
+    driver_available = db.Column(db.String(50), default="Yes (With Driver)")
+    engagement_type = db.Column(db.String(50), default="For Hire (Daily)")
+    status = db.Column(db.String(50), default="Available")
+    admin_status = db.Column(db.String(50), default="Pending")
+    photo_path = db.Column(db.String(255))
 
-    president_name = db.Column(db.String(100))
-    president_phone = db.Column(db.String(20))
 
-    secretary_name = db.Column(db.String(100))
-    secretary_phone = db.Column(db.String(20))
-
-    renewed_years = db.Column(db.String(250), default="")
-    last_renewed_fy = db.Column(db.String(50), default="")
-    renewal_status = db.Column(db.String(20), default="Pending")
+class HireRequest(db.Model):
+    __tablename__ = "hire_requests"
+    id = db.Column(db.Integer, primary_key=True)
+    user_name = db.Column(db.String(100), nullable=False)
+    user_phone = db.Column(db.String(20), nullable=False)
+    car_type_needed = db.Column(db.String(50), nullable=False)
+    driver_needed = db.Column(db.String(50), default="Yes")
+    pickup_location = db.Column(db.String(150), nullable=False)
+    drop_location = db.Column(db.String(150), nullable=False)
+    travel_date = db.Column(db.String(50), nullable=False)
+    days_count = db.Column(db.Integer, nullable=False)
     notes = db.Column(db.Text)
-    updated_at = db.Column(db.String(50))
+    request_date = db.Column(db.String(50), nullable=False)
+    request_status = db.Column(db.String(50), default="Pending")
+    assigned_car_id = db.Column(db.Integer, db.ForeignKey("cars.id"), nullable=True)
 
 
 with app.app_context():
     db.create_all()
 
 
-# ---------------- HELPER FUNCTIONS ---------------- #
 def clean_phone_for_wa(phone):
-    if not phone:
-        return ""
     digits = "".join(filter(str.isdigit, str(phone)))
     if len(digits) == 10:
         return "91" + digits
     return digits
 
 
-def get_current_fy():
-    today = date.today()
-    if today.month >= 4:
-        return f"{today.year}-{str(today.year + 1)[-2:]}"
-    else:
-        return f"{today.year - 1}-{str(today.year)[-2:]}"
-
-
-app.jinja_env.globals.update(
-    clean_phone_for_wa=clean_phone_for_wa, current_fy=get_current_fy()
-)
+app.jinja_env.globals.update(clean_phone_for_wa=clean_phone_for_wa)
 
 # ---------------- HTML TEMPLATES ---------------- #
-LOGIN_HTML = """
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>WB Society Portal - Admin Login</title>
-    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/all.min.css">
-    <style>
-        body { background: linear-gradient(135deg, #0f172a 0%, #1e3a8a 100%); height: 100vh; display: flex; align-items: center; justify-content: center; font-family: 'Segoe UI', sans-serif; }
-        .login-card { background: #fff; border-radius: 16px; padding: 35px; width: 100%; max-width: 400px; box-shadow: 0 15px 35px rgba(0,0,0,0.3); }
-    </style>
-</head>
-<body>
-    <div class="login-card text-center">
-        <div class="mb-3 text-primary"><i class="fa-solid fa-building-columns fa-3x"></i></div>
-        <h4 class="fw-bold mb-1">WB Society Registry</h4>
-        <p class="text-muted small mb-4">Renewal & Client Database Management</p>
-        {% with messages = get_flashed_messages(with_categories=true) %}
-          {% if messages %}
-            {% for category, message in messages %}
-              <div class="alert alert-{{ category }} py-2 small">{{ message }}</div>
-            {% endfor %}
-          {% endif %}
-        {% endwith %}
-        <form method="POST">
-            <div class="mb-3 text-start">
-                <label class="form-label small fw-bold">Admin Password</label>
-                <input type="password" name="password" class="form-control form-control-lg" placeholder="Enter password" required autofocus>
-            </div>
-            <button type="submit" class="btn btn-primary w-100 btn-lg fw-bold">Unlock Dashboard</button>
-        </form>
-    </div>
-</body>
-</html>
-"""
 
-DASHBOARD_HTML = """
+BASE_HTML = """
 <!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>WB Society Renewal Manager</title>
-    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/all.min.css">
+    <title>CAB PRO - Professional Car Hire &amp; Dispatch Portal</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <style>
-        body { background-color: #f1f5f9; font-family: 'Segoe UI', system-ui, sans-serif; }
-        .navbar-custom { background: linear-gradient(90deg, #0f172a 0%, #1e40af 100%); }
-        .stat-card { border: none; border-radius: 12px; transition: transform 0.2s; }
-        .stat-card:hover { transform: translateY(-3px); }
-        .society-card { background: #fff; border-radius: 14px; border: 1px solid #e2e8f0; transition: all 0.2s; }
-        .society-card:hover { box-shadow: 0 10px 25px rgba(0,0,0,0.08); border-color: #cbd5e1; }
+        :root { --primary: #1e3d59; --accent: #ff6e40; }
+        body { background-color: #f5f7fa; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; color: #333; }
+        .navbar { background: linear-gradient(135deg, #1e3d59 0%, #17b978 100%); }
+        .hero { background: linear-gradient(rgba(30,61,89,0.85), rgba(23,185,120,0.85)), url('https://images.unsplash.com/photo-1449965408869-eaa3f722e40d?auto=format&fit=crop&w=1200&q=80') center/cover; color: white; padding: 60px 0; }
+        .card-custom { border: none; border-radius: 12px; box-shadow: 0 4px 15px rgba(0,0,0,0.05); background: white; transition: 0.2s; }
+        .card-custom:hover { transform: translateY(-3px); box-shadow: 0 8px 25px rgba(0,0,0,0.1); }
         .btn-wa { background-color: #25D366; color: white; border: none; }
         .btn-wa:hover { background-color: #1ebe5d; color: white; }
-        .badge-fy { background-color: #e0f2fe; color: #0369a1; border: 1px solid #bae6fd; font-weight: 600; }
-        .nav-pills .nav-link.active.pending-tab { background-color: #dc2626; }
-        .nav-pills .nav-link.active.completed-tab { background-color: #16a34a; }
+        .service-marquee-bar {
+            background: linear-gradient(90deg, #1e3d59 0%, #0f172a 50%, #1e3d59 100%);
+            color: #ffffff;
+            border-radius: 10px;
+            padding: 10px 14px;
+            border-left: 5px solid #ffc107;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.12);
+        }
+        .marquee-badge {
+            background: #ffc107;
+            color: #111827;
+            font-weight: 800;
+            font-size: 0.78rem;
+            padding: 4px 10px;
+            border-radius: 6px;
+            white-space: nowrap;
+        }
+        .filter-btn.active {
+            background-color: #1e3d59 !important;
+            color: #ffffff !important;
+            border-color: #1e3d59 !important;
+        }
     </style>
 </head>
 <body>
-
-<!-- NAVBAR -->
-<nav class="navbar navbar-expand-lg navbar-dark navbar-custom shadow-sm sticky-top">
+<nav class="navbar navbar-expand-lg navbar-dark shadow-sm sticky-top">
     <div class="container">
-        <a class="navbar-brand fw-bold d-flex align-items-center" href="/">
-            <i class="fa-solid fa-landmark me-2 text-warning"></i> WB SOCIETY MANAGER
-        </a>
-        <div class="d-flex flex-wrap gap-2">
-            <button class="btn btn-warning btn-sm fw-bold" data-bs-toggle="modal" data-bs-target="#addSocietyModal">
-                <i class="fa-solid fa-plus me-1"></i> New Society
-            </button>
-            <button class="btn btn-info btn-sm fw-bold text-dark" data-bs-toggle="modal" data-bs-target="#bulkModal">
-                <i class="fa-solid fa-file-import me-1"></i> Bulk Import
-            </button>
-            <a href="/export_excel" class="btn btn-success btn-sm fw-bold">
-                <i class="fa-solid fa-file-excel me-1"></i> Export Excel
-            </a>
-            <a href="/reset_all_pending" onclick="return confirm('আপনি কি নতুন আর্থিক বছরের (After March) জন্য সব সোসাইটিকে একসাথে Pending লিস্টে নিয়ে আসতে চান?')" class="btn btn-outline-light btn-sm" title="Start New Renewal Cycle">
-                <i class="fa-solid fa-rotate"></i> New Year Cycle
-            </a>
-            <a href="/logout" class="btn btn-danger btn-sm"><i class="fa-solid fa-right-from-bracket"></i></a>
+        <a class="navbar-brand fw-bold" href="/"><i class="fa-solid fa-car-side text-warning me-2"></i>CAB PRO</a>
+        <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navMenu">
+            <span class="navbar-toggler-icon"></span>
+        </button>
+        <div class="collapse navbar-collapse" id="navMenu">
+            <ul class="navbar-nav ms-auto gap-2">
+                <li class="nav-item"><a class="nav-link text-white fw-semibold" href="/">Book Car</a></li>
+                <li class="nav-item"><a class="nav-link text-warning fw-bold" href="/fleet">Approved Fleet</a></li>
+                <li class="nav-item"><a class="nav-link text-info fw-bold" href="/owner_login"><i class="fa-solid fa-car-rear"></i> Owner Portal</a></li>
+                <li class="nav-item"><a class="nav-link text-white fw-semibold" href="/admin_login"><i class="fa-solid fa-user-shield"></i> Admin</a></li>
+            </ul>
         </div>
     </div>
 </nav>
 
-<div class="container my-4">
-
+<div class="container mt-3">
     {% with messages = get_flashed_messages(with_categories=true) %}
       {% if messages %}
-        {% for category, message in messages %}
-          <div class="alert alert-{{ category }} alert-dismissible fade show shadow-sm" role="alert">
-            {{ message }}
+        {% for cat, msg in messages %}
+          <div class="alert alert-{{ cat }} alert-dismissible fade show shadow-sm">
+            {{ msg }}
             <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
           </div>
         {% endfor %}
       {% endif %}
     {% endwith %}
-
-    <!-- MARCH RENEWAL ALERT BANNER -->
-    <div class="alert alert-warning border-warning d-flex flex-wrap justify-content-between align-items-center shadow-sm rounded-3 mb-4">
-        <div>
-            <h6 class="fw-bold mb-1 text-dark"><i class="fa-solid fa-bell text-danger me-2"></i>Annual Renewal Reminder (After March Rule)</h6>
-            <small class="text-dark">মার্চ মাস শেষ হলে প্রতিটি সোসাইটির বার্ষিক রিনিউয়াল বাধ্যতামূলক। নিচের <strong>Pending</strong> ট্যাব থেকে সরাসরি প্রেসিডেন্ট বা সেক্রেটারিকে WhatsApp অ্যালার্ট পাঠান।</small>
-        </div>
-        <span class="badge bg-dark px-3 py-2 mt-2 mt-md-0">Active FY: {{ current_fy }}</span>
-    </div>
-
-    <!-- SUMMARY STATS -->
-    <div class="row g-3 mb-4">
-        <div class="col-md-4">
-            <div class="card stat-card bg-white p-3 shadow-sm border-start border-primary border-4">
-                <div class="d-flex justify-content-between align-items-center">
-                    <div>
-                        <p class="text-muted small mb-1 fw-bold">TOTAL SOCIETIES</p>
-                        <h3 class="fw-bold mb-0 text-primary">{{ total_count }}</h3>
-                    </div>
-                    <div class="bg-primary bg-opacity-10 p-3 rounded-circle text-primary"><i class="fa-solid fa-folder-open fa-lg"></i></div>
-                </div>
-            </div>
-        </div>
-        <div class="col-md-4">
-            <div class="card stat-card bg-white p-3 shadow-sm border-start border-danger border-4">
-                <div class="d-flex justify-content-between align-items-center">
-                    <div>
-                        <p class="text-muted small mb-1 fw-bold">RENEWAL PENDING</p>
-                        <h3 class="fw-bold mb-0 text-danger">{{ pending_list|length }}</h3>
-                    </div>
-                    <div class="bg-danger bg-opacity-10 p-3 rounded-circle text-danger"><i class="fa-solid fa-clock-rotate-left fa-lg"></i></div>
-                </div>
-            </div>
-        </div>
-        <div class="col-md-4">
-            <div class="card stat-card bg-white p-3 shadow-sm border-start border-success border-4">
-                <div class="d-flex justify-content-between align-items-center">
-                    <div>
-                        <p class="text-muted small mb-1 fw-bold">RENEWAL COMPLETED</p>
-                        <h3 class="fw-bold mb-0 text-success">{{ completed_list|length }}</h3>
-                    </div>
-                    <div class="bg-success bg-opacity-10 p-3 rounded-circle text-success"><i class="fa-solid fa-circle-check fa-lg"></i></div>
-                </div>
-            </div>
-        </div>
-    </div>
-
-    <!-- SEARCH BAR & TABS -->
-    <div class="bg-white p-3 rounded-3 shadow-sm mb-4">
-        <div class="row g-3 align-items-center">
-            <div class="col-md-6">
-                <ul class="nav nav-pills" id="renewalTabs" role="tablist">
-                    <li class="nav-item" role="presentation">
-                        <button class="nav-link active pending-tab fw-bold" id="pending-tab" data-bs-toggle="pill" data-bs-target="#pending" type="button">
-                            <i class="fa-solid fa-hourglass-half me-1"></i> Pending ({{ pending_list|length }})
-                        </button>
-                    </li>
-                    <li class="nav-item ms-2" role="presentation">
-                        <button class="nav-link completed-tab fw-bold" id="completed-tab" data-bs-toggle="pill" data-bs-target="#completed" type="button">
-                            <i class="fa-solid fa-check-double me-1"></i> Completed ({{ completed_list|length }})
-                        </button>
-                    </li>
-                </ul>
-            </div>
-            <div class="col-md-6">
-                <div class="input-group">
-                    <span class="input-group-text bg-light border-end-0"><i class="fa-solid fa-magnifying-glass text-muted"></i></span>
-                    <input type="text" id="searchInput" class="form-control border-start-0" placeholder="Search by Society Name, Reg No, PAN, President or Phone...">
-                </div>
-            </div>
-        </div>
-    </div>
-
-    <!-- TAB CONTENTS -->
-    <div class="tab-content" id="renewalTabsContent">
-        
-        <!-- PENDING TAB -->
-        <div class="tab-pane fade show active" id="pending" role="tabpanel">
-            <div class="row g-3">
-                {% for s in pending_list %}
-                <div class="col-md-6 society-item">
-                    <div class="society-card p-4 h-100 d-flex flex-column">
-                        <div class="d-flex justify-content-between align-items-start mb-2">
-                            <div>
-                                <span class="badge bg-danger mb-1">Renewal Pending</span>
-                                <h5 class="fw-bold text-dark mb-0">{{ s.society_name }}</h5>
-                                <small class="text-primary fw-bold"><i class="fa-solid fa-hashtag"></i> Reg No: {{ s.reg_number }}</small>
-                                {% if s.reg_date %}<small class="text-muted ms-2">| Reg Date: {{ s.reg_date }}</small>{% endif %}
-                            </div>
-                            <div class="dropdown">
-                                <button class="btn btn-light btn-sm border" data-bs-toggle="dropdown"><i class="fa-solid fa-ellipsis-vertical"></i></button>
-                                <ul class="dropdown-menu dropdown-menu-end">
-                                    <li><a class="dropdown-item" href="#" data-bs-toggle="modal" data-bs-target="#editModal{{ s.id }}"><i class="fa-solid fa-pen text-primary me-2"></i>Edit Details</a></li>
-                                    <li><a class="dropdown-item text-danger" href="/delete/{{ s.id }}" onclick="return confirm('Delete this society permanently?')"><i class="fa-solid fa-trash me-2"></i>Delete</a></li>
-                                </ul>
-                            </div>
-                        </div>
-
-                        <div class="bg-light p-2 rounded small mb-3 border">
-                            <div class="row g-1">
-                                <div class="col-6"><strong>PAN:</strong> <span class="text-uppercase">{{ s.pan_number or 'N/A' }}</span></div>
-                                <div class="col-6"><strong>Last FY:</strong> {{ s.last_renewed_fy or 'None' }}</div>
-                                <div class="col-12 mt-1"><strong>Bank:</strong> {{ s.bank_details or 'Not Added' }}</div>
-                                <div class="col-12 mt-1"><strong>Address:</strong> {{ s.address or 'N/A' }}</div>
-                            </div>
-                        </div>
-
-                        <!-- RENEWED YEARS HISTORY -->
-                        <div class="mb-3">
-                            <small class="text-muted fw-bold d-block mb-1"><i class="fa-solid fa-calendar-check text-success me-1"></i> Renewed Years History:</small>
-                            {% if s.renewed_years %}
-                                {% for yr in s.renewed_years.split(',') %}
-                                    <span class="badge badge-fy me-1">{{ yr.strip() }}</span>
-                                {% endfor %}
-                            {% else %}
-                                <span class="text-muted small fst-italic">No previous renewal record</span>
-                            {% endif %}
-                        </div>
-
-                        <!-- CONTACTS & WHATSAPP ALERT -->
-                        <div class="border-top pt-2 mt-auto">
-                            <!-- President -->
-                            <div class="d-flex justify-content-between align-items-center mb-2">
-                                <div class="small">
-                                    <span class="badge bg-secondary">President</span> <strong>{{ s.president_name or 'N/A' }}</strong><br>
-                                    <span class="text-muted">{{ s.president_phone or 'No Phone' }}</span>
-                                </div>
-                                {% if s.president_phone %}
-                                <div class="d-flex gap-1">
-                                    <a href="tel:{{ s.president_phone }}" class="btn btn-outline-primary btn-sm" title="Call President"><i class="fa-solid fa-phone"></i></a>
-                                    <a href="https://wa.me/{{ clean_phone_for_wa(s.president_phone) }}?text={{ ('নমস্কার ' ~ (s.president_name or '') ~ ', আপনার সোসাইটি *' ~ s.society_name ~ '* (Reg No: ' ~ s.reg_number ~ ')-এর বার্ষিক রিনিউয়াল (Annual Renewal - FY ' ~ current_fy ~ ') মার্চ মাস শেষ হওয়ার পর এখন পেন্ডিং আছে। অনুগ্রহ করে প্রয়োজনীয় কাগজপত্র সহ দ্রুত রিনিউয়াল সম্পন্ন করুন।') | urlencode }}" target="_blank" class="btn btn-wa btn-sm fw-semibold">
-                                        <i class="fa-brands fa-whatsapp"></i> Alert
-                                    </a>
-                                </div>
-                                {% endif %}
-                            </div>
-
-                            <!-- Secretary -->
-                            <div class="d-flex justify-content-between align-items-center mb-3">
-                                <div class="small">
-                                    <span class="badge bg-info text-dark">Secretary</span> <strong>{{ s.secretary_name or 'N/A' }}</strong><br>
-                                    <span class="text-muted">{{ s.secretary_phone or 'No Phone' }}</span>
-                                </div>
-                                {% if s.secretary_phone %}
-                                <div class="d-flex gap-1">
-                                    <a href="tel:{{ s.secretary_phone }}" class="btn btn-outline-primary btn-sm" title="Call Secretary"><i class="fa-solid fa-phone"></i></a>
-                                    <a href="https://wa.me/{{ clean_phone_for_wa(s.secretary_phone) }}?text={{ ('নমস্কার ' ~ (s.secretary_name or '') ~ ', আপনার সোসাইটি *' ~ s.society_name ~ '* (Reg No: ' ~ s.reg_number ~ ')-এর বার্ষিক রিনিউয়াল (Annual Renewal - FY ' ~ current_fy ~ ') মার্চ মাস শেষ হওয়ার পর এখন পেন্ডিং আছে। অনুগ্রহ করে প্রয়োজনীয় কাগজপত্র সহ দ্রুত রিনিউয়াল সম্পন্ন করুন।') | urlencode }}" target="_blank" class="btn btn-wa btn-sm fw-semibold">
-                                        <i class="fa-brands fa-whatsapp"></i> Alert
-                                    </a>
-                                </div>
-                                {% endif %}
-                            </div>
-
-                            <!-- MARK COMPLETED BUTTON -->
-                            <button class="btn btn-success w-100 btn-sm fw-bold" data-bs-toggle="modal" data-bs-target="#completeModal{{ s.id }}">
-                                <i class="fa-solid fa-check-circle me-1"></i> Mark Renewal Completed
-                            </button>
-                        </div>
-                    </div>
-                </div>
-                {% else %}
-                <div class="col-12 text-center py-5 bg-white rounded-3 shadow-sm">
-                    <i class="fa-solid fa-party-horn fa-3x text-success mb-2"></i>
-                    <h5 class="fw-bold text-muted">কোনো Pending রিনিউয়াল বাকি নেই!</h5>
-                </div>
-                {% endfor %}
-            </div>
-        </div>
-
-        <!-- COMPLETED TAB -->
-        <div class="tab-pane fade" id="completed" role="tabpanel">
-            <div class="row g-3">
-                {% for s in completed_list %}
-                <div class="col-md-6 society-item">
-                    <div class="society-card p-4 h-100 d-flex flex-column border-success border-opacity-50">
-                        <div class="d-flex justify-content-between align-items-start mb-2">
-                            <div>
-                                <span class="badge bg-success mb-1"><i class="fa-solid fa-check"></i> Renewal Completed</span>
-                                <h5 class="fw-bold text-dark mb-0">{{ s.society_name }}</h5>
-                                <small class="text-primary fw-bold"><i class="fa-solid fa-hashtag"></i> Reg No: {{ s.reg_number }}</small>
-                            </div>
-                            <div class="dropdown">
-                                <button class="btn btn-light btn-sm border" data-bs-toggle="dropdown"><i class="fa-solid fa-ellipsis-vertical"></i></button>
-                                <ul class="dropdown-menu dropdown-menu-end">
-                                    <li><a class="dropdown-item" href="#" data-bs-toggle="modal" data-bs-target="#editModal{{ s.id }}"><i class="fa-solid fa-pen text-primary me-2"></i>Edit Details</a></li>
-                                    <li><a class="dropdown-item text-warning" href="/mark_pending/{{ s.id }}"><i class="fa-solid fa-rotate-left me-2"></i>Move back to Pending</a></li>
-                                    <li><a class="dropdown-item text-danger" href="/delete/{{ s.id }}" onclick="return confirm('Delete this society permanently?')"><i class="fa-solid fa-trash me-2"></i>Delete</a></li>
-                                </ul>
-                            </div>
-                        </div>
-
-                        <div class="bg-light p-2 rounded small mb-3 border">
-                            <div class="row g-1">
-                                <div class="col-6"><strong>PAN:</strong> <span class="text-uppercase">{{ s.pan_number or 'N/A' }}</span></div>
-                                <div class="col-6"><strong>Latest FY:</strong> <span class="text-success fw-bold">{{ s.last_renewed_fy }}</span></div>
-                                <div class="col-12 mt-1"><strong>Bank:</strong> {{ s.bank_details or 'Not Added' }}</div>
-                                <div class="col-12 mt-1"><strong>Address:</strong> {{ s.address or 'N/A' }}</div>
-                            </div>
-                        </div>
-
-                        <div class="mb-3">
-                            <small class="text-muted fw-bold d-block mb-1">All Completed Renewal Years:</small>
-                            {% if s.renewed_years %}
-                                {% for yr in s.renewed_years.split(',') %}
-                                    <span class="badge badge-fy me-1">{{ yr.strip() }}</span>
-                                {% endfor %}
-                            {% endif %}
-                        </div>
-
-                        <div class="border-top pt-2 mt-auto">
-                            <div class="d-flex justify-content-between align-items-center small mb-1">
-                                <span><strong>Pres:</strong> {{ s.president_name or 'N/A' }} ({{ s.president_phone or '-' }})</span>
-                                {% if s.president_phone %}
-                                <div>
-                                    <a href="tel:{{ s.president_phone }}" class="btn btn-outline-primary btn-sm py-0 px-2"><i class="fa-solid fa-phone"></i></a>
-                                    <a href="https://wa.me/{{ clean_phone_for_wa(s.president_phone) }}?text={{ ('নমস্কার ' ~ (s.president_name or '') ~ ', আপনার সোসাইটি *' ~ s.society_name ~ '* (Reg No: ' ~ s.reg_number ~ ')-এর বার্ষিক রিনিউয়াল (' ~ s.last_renewed_fy ~ ') সফলভাবে সম্পন্ন হয়েছে। ধন্যবাদ।') | urlencode }}" target="_blank" class="btn btn-wa btn-sm py-0 px-2"><i class="fa-brands fa-whatsapp"></i></a>
-                                </div>
-                                {% endif %}
-                            </div>
-                            <div class="d-flex justify-content-between align-items-center small">
-                                <span><strong>Secy:</strong> {{ s.secretary_name or 'N/A' }} ({{ s.secretary_phone or '-' }})</span>
-                                {% if s.secretary_phone %}
-                                <div>
-                                    <a href="tel:{{ s.secretary_phone }}" class="btn btn-outline-primary btn-sm py-0 px-2"><i class="fa-solid fa-phone"></i></a>
-                                    <a href="https://wa.me/{{ clean_phone_for_wa(s.secretary_phone) }}?text={{ ('নমস্কার ' ~ (s.secretary_name or '') ~ ', আপনার সোসাইটি *' ~ s.society_name ~ '* (Reg No: ' ~ s.reg_number ~ ')-এর বার্ষিক রিনিউয়াল (' ~ s.last_renewed_fy ~ ') সফলভাবে সম্পন্ন হয়েছে। ধন্যবাদ।') | urlencode }}" target="_blank" class="btn btn-wa btn-sm py-0 px-2"><i class="fa-brands fa-whatsapp"></i></a>
-                                </div>
-                                {% endif %}
-                            </div>
-                        </div>
-                    </div>
-                </div>
-                {% else %}
-                <div class="col-12 text-center py-5 bg-white rounded-3 shadow-sm">
-                    <p class="text-muted mb-0">এখনও কোনো সোসাইটি Completed লিস্টে নেই।</p>
-                </div>
-                {% endfor %}
-            </div>
-        </div>
-
-    </div>
 </div>
+"""
 
-<!-- MODALS FOR MARKING COMPLETE & EDITING -->
-{% for s in all_societies %}
-<!-- Complete Modal -->
-<div class="modal fade" id="completeModal{{ s.id }}" tabindex="-1">
-    <div class="modal-dialog">
-        <form action="/mark_complete/{{ s.id }}" method="POST" class="modal-content">
-            <div class="modal-header bg-success text-white">
-                <h5 class="modal-title fw-bold">Complete Renewal: {{ s.society_name }}</h5>
-                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
-            </div>
-            <div class="modal-body">
-                <label class="form-label fw-bold">কোন আর্থিক বছরের (Financial Year) রিনিউয়াল কমপ্লিট হলো?</label>
-                <input type="text" name="completed_fy" class="form-control form-control-lg" value="{{ current_fy }}" placeholder="e.g. 2026-27" required>
-                <small class="text-muted d-block mt-2">এটি সাবমিট করলে বছরটি সোসাইটির Renewed Years হিস্ট্রিতে যুক্ত হয়ে যাবে এবং কার্ডটি Completed ট্যাবে চলে যাবে।</small>
-            </div>
-            <div class="modal-footer">
-                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
-                <button type="submit" class="btn btn-success fw-bold">Confirm & Save</button>
-            </div>
-        </form>
+BASE_FOOT = """
+<footer class="bg-white border-top py-4 mt-5 text-center text-muted">
+    <div class="container">
+        <p class="mb-1 fw-bold text-dark">CAB PRO - Professional Car Hire &amp; Dispatch Portal</p>
+        <small class="d-block mb-1">Contact Admin: <strong>Future Computer</strong>, Below SBI, Birpara</small>
+        <small class="text-primary"><i class="fa-solid fa-phone"></i> Mobile: 9733-290-230 / 7001-158-084</small>
     </div>
-</div>
-
-<!-- Edit Modal -->
-<div class="modal fade" id="editModal{{ s.id }}" tabindex="-1">
-    <div class="modal-dialog modal-lg">
-        <form action="/edit/{{ s.id }}" method="POST" class="modal-content">
-            <div class="modal-header bg-primary text-white">
-                <h5 class="modal-title fw-bold">Edit Society Details</h5>
-                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
-            </div>
-            <div class="modal-body">
-                <div class="row g-3">
-                    <div class="col-md-8">
-                        <label class="form-label small fw-bold">Society Name *</label>
-                        <input type="text" name="society_name" class="form-control" value="{{ s.society_name }}" required>
-                    </div>
-                    <div class="col-md-4">
-                        <label class="form-label small fw-bold">Registration Number *</label>
-                        <input type="text" name="reg_number" class="form-control" value="{{ s.reg_number }}" required>
-                    </div>
-                    <div class="col-md-4">
-                        <label class="form-label small fw-bold">Registration Date</label>
-                        <input type="text" name="reg_date" class="form-control" value="{{ s.reg_date or '' }}" placeholder="DD-MM-YYYY">
-                    </div>
-                    <div class="col-md-4">
-                        <label class="form-label small fw-bold">Society PAN Number</label>
-                        <input type="text" name="pan_number" class="form-control text-uppercase" value="{{ s.pan_number or '' }}">
-                    </div>
-                    <div class="col-md-4">
-                        <label class="form-label small fw-bold">Status</label>
-                        <select name="renewal_status" class="form-select">
-                            <option value="Pending" {% if s.renewal_status == 'Pending' %}selected{% endif %}>Pending</option>
-                            <option value="Completed" {% if s.renewal_status == 'Completed' %}selected{% endif %}>Completed</option>
-                        </select>
-                    </div>
-                    <div class="col-md-6">
-                        <label class="form-label small fw-bold">President Name</label>
-                        <input type="text" name="president_name" class="form-control" value="{{ s.president_name or '' }}">
-                    </div>
-                    <div class="col-md-6">
-                        <label class="form-label small fw-bold">President Mobile / WhatsApp</label>
-                        <input type="text" name="president_phone" class="form-control" value="{{ s.president_phone or '' }}">
-                    </div>
-                    <div class="col-md-6">
-                        <label class="form-label small fw-bold">Secretary Name</label>
-                        <input type="text" name="secretary_name" class="form-control" value="{{ s.secretary_name or '' }}">
-                    </div>
-                    <div class="col-md-6">
-                        <label class="form-label small fw-bold">Secretary Mobile / WhatsApp</label>
-                        <input type="text" name="secretary_phone" class="form-control" value="{{ s.secretary_phone or '' }}">
-                    </div>
-                    <div class="col-12">
-                        <label class="form-label small fw-bold">Bank Account Details (Bank Name, A/C No, IFSC)</label>
-                        <input type="text" name="bank_details" class="form-control" value="{{ s.bank_details or '' }}">
-                    </div>
-                    <div class="col-12">
-                        <label class="form-label small fw-bold">Registered Address</label>
-                        <textarea name="address" class="form-control" rows="2">{{ s.address or '' }}</textarea>
-                    </div>
-                    <div class="col-12">
-                        <label class="form-label small fw-bold">Renewed Years History (Comma separated, e.g. 2023-24, 2024-25)</label>
-                        <input type="text" name="renewed_years" class="form-control" value="{{ s.renewed_years or '' }}">
-                    </div>
-                </div>
-            </div>
-            <div class="modal-footer">
-                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
-                <button type="submit" class="btn btn-primary fw-bold">Update Record</button>
-            </div>
-        </form>
-    </div>
-</div>
-{% endfor %}
-
-<!-- BULK IMPORT MODAL -->
-<div class="modal fade" id="bulkModal" tabindex="-1">
-    <div class="modal-dialog">
-        <form action="/bulk_import" method="POST" class="modal-content">
-            <div class="modal-header bg-info text-dark">
-                <h5 class="modal-title fw-bold"><i class="fa-solid fa-layer-group me-2"></i>Bulk Import Societies</h5>
-                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
-            </div>
-            <div class="modal-body">
-                <label class="form-label small fw-bold">প্রতি লাইনে একটি করে সোসাইটির নাম পেস্ট করুন (সর্বোচ্চ ৪০-৫০টি করে দিন):</label>
-                <textarea name="bulk_names" class="form-control" rows="8" placeholder="Birpara Jubilee Club&#10;Laxmi Welfare Society&#10;..." required></textarea>
-                <small class="text-muted d-block mt-2">সার্ভার টাইম-আউট এড়াতে একবারে ৪০-৫০টি করে নাম দিয়ে Import All করুন।</small>
-            </div>
-            <div class="modal-footer">
-                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
-                <button type="submit" class="btn btn-info fw-bold">Import All</button>
-            </div>
-        </form>
-    </div>
-</div>
-
-<!-- ADD NEW SOCIETY MODAL -->
-<div class="modal fade" id="addSocietyModal" tabindex="-1">
-    <div class="modal-dialog modal-lg">
-        <form action="/add_society" method="POST" class="modal-content">
-            <div class="modal-header bg-dark text-white">
-                <h5 class="modal-title fw-bold"><i class="fa-solid fa-folder-plus text-warning me-2"></i>Add New WB Society Record</h5>
-                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
-            </div>
-            <div class="modal-body">
-                <div class="row g-3">
-                    <div class="col-md-8">
-                        <label class="form-label small fw-bold">Society Name *</label>
-                        <input type="text" name="society_name" class="form-control" placeholder="e.g. Birpara Jubilee Club" required>
-                    </div>
-                    <div class="col-md-4">
-                        <label class="form-label small fw-bold">Registration Number *</label>
-                        <input type="text" name="reg_number" class="form-control" placeholder="e.g. S/2L/12345" required>
-                    </div>
-                    <div class="col-md-4">
-                        <label class="form-label small fw-bold">Registration Date</label>
-                        <input type="text" name="reg_date" class="form-control" placeholder="DD-MM-YYYY">
-                    </div>
-                    <div class="col-md-4">
-                        <label class="form-label small fw-bold">Society PAN Number</label>
-                        <input type="text" name="pan_number" class="form-control text-uppercase" placeholder="AAAAB1234C">
-                    </div>
-                    <div class="col-md-4">
-                        <label class="form-label small fw-bold">Current Renewal Status</label>
-                        <select name="renewal_status" class="form-select">
-                            <option value="Pending" selected>Pending</option>
-                            <option value="Completed">Completed</option>
-                        </select>
-                    </div>
-                    <div class="col-md-6">
-                        <label class="form-label small fw-bold">President Name</label>
-                        <input type="text" name="president_name" class="form-control">
-                    </div>
-                    <div class="col-md-6">
-                        <label class="form-label small fw-bold">President Mobile / WhatsApp</label>
-                        <input type="text" name="president_phone" class="form-control" placeholder="10 digit number">
-                    </div>
-                    <div class="col-md-6">
-                        <label class="form-label small fw-bold">Secretary Name</label>
-                        <input type="text" name="secretary_name" class="form-control">
-                    </div>
-                    <div class="col-md-6">
-                        <label class="form-label small fw-bold">Secretary Mobile / WhatsApp</label>
-                        <input type="text" name="secretary_phone" class="form-control" placeholder="10 digit number">
-                    </div>
-                    <div class="col-12">
-                        <label class="form-label small fw-bold">Bank Account Details (Bank Name, A/C No, IFSC)</label>
-                        <input type="text" name="bank_details" class="form-control" placeholder="e.g. SBI Birpara, A/C: 30123456789, IFSC: SBIN0001234">
-                    </div>
-                    <div class="col-12">
-                        <label class="form-label small fw-bold">Registered Address</label>
-                        <textarea name="address" class="form-control" rows="2" placeholder="Full village/town, PO, PS, District, PIN"></textarea>
-                    </div>
-                    <div class="col-12">
-                        <label class="form-label small fw-bold">Already Renewed Years (Optional, comma separated)</label>
-                        <input type="text" name="renewed_years" class="form-control" placeholder="e.g. 2022-23, 2023-24, 2024-25">
-                    </div>
-                </div>
-            </div>
-            <div class="modal-footer">
-                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
-                <button type="submit" class="btn btn-primary fw-bold px-4">Save Society Folder</button>
-            </div>
-        </form>
-    </div>
-</div>
-
-<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
-<script>
-    document.getElementById('searchInput').addEventListener('keyup', function() {
-        let filter = this.value.toLowerCase();
-        let cards = document.querySelectorAll('.society-item');
-        cards.forEach(function(card) {
-            let text = card.innerText.toLowerCase();
-            card.style.display = text.includes(filter) ? '' : 'none';
-        });
-    });
-</script>
+</footer>
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
 </body>
 </html>
 """
 
+INDEX_HTML = (
+    BASE_HTML
+    + """
+<div class="hero text-center mb-5">
+    <div class="container">
+        <h1 class="fw-bold mb-3">CAB PRO - Book Your Ride Professional &amp; Fast</h1>
+        <p class="lead mb-4">Send your travel requirements. Admin will instantly assign the best available car!</p>
+        <div class="d-flex justify-content-center gap-3 flex-wrap">
+            <button class="btn btn-warning btn-lg fw-bold px-4 text-dark shadow" data-bs-toggle="modal" data-bs-target="#requestModal"><i class="fa-solid fa-paper-plane"></i> Request a Car Now</button>
+            <button class="btn btn-success btn-lg fw-bold px-4 shadow" data-bs-toggle="modal" data-bs-target="#ownerModal"><i class="fa-solid fa-car"></i> Car Owner? List Your Car</button>
+        </div>
+    </div>
+</div>
+
+<div class="container mb-5">
+    <div class="row align-items-center">
+        <div class="col-md-6 mb-4 mb-md-0">
+            <h2 class="fw-bold text-dark mb-3">System Features</h2>
+            <ul class="list-unstyled fs-5 gap-3 d-flex flex-column">
+                <li><i class="fa-solid fa-circle-check text-success me-2"></i> <strong>User Booking:</strong> Submit trip requirements easily.</li>
+                <li><i class="fa-solid fa-circle-check text-success me-2"></i> <strong>Owner Self-Service:</strong> Owners can log in with their phone number to update car status!</li>
+                <li><i class="fa-solid fa-circle-check text-success me-2"></i> <strong>Admin Dispatch:</strong> Seamless trip management and assignment.</li>
+            </ul>
+        </div>
+        <div class="col-md-6 text-center">
+            <div class="card-custom p-4 bg-white border-start border-5 border-success text-start">
+                <h4 class="fw-bold text-success mb-3"><i class="fa-solid fa-car"></i> Available Fleet Highlights</h4>
+                <div class="row g-3">
+                    {% for c in cars[:4] %}
+                    <div class="col-6">
+                        <div class="p-2 border rounded bg-light">
+                            <strong>{{ c.car_name }}</strong><br>
+                            <small class="text-muted">{{ c.car_type }} &bull; ₹{{ c.rate_per_day }}/day</small><br>
+                            <span class="badge bg-{{ 'success' if c.status=='Available' else 'secondary' }}">{{ c.status }}</span>
+                        </div>
+                    </div>
+                    {% else %}
+                    <p class="text-muted">No available cars right now.</p>
+                    {% endfor %}
+                </div>
+                <div class="mt-3 text-end">
+                    <a href="/fleet" class="btn btn-sm btn-outline-success fw-bold">View Full Fleet &rarr;</a>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- USER REQUEST MODAL -->
+<div class="modal fade" id="requestModal" tabindex="-1">
+    <div class="modal-dialog modal-lg">
+        <div class="modal-content">
+            <div class="modal-header bg-warning text-dark">
+                <h5 class="modal-title fw-bold"><i class="fa-solid fa-car-side"></i> Car Hire Request Form</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <form method="POST" action="/submit_request">
+                <div class="modal-body row g-3">
+                    <div class="col-md-6"><label class="form-label fw-semibold">Your Full Name *</label><input type="text" name="user_name" class="form-control" required></div>
+                    <div class="col-md-6"><label class="form-label fw-semibold">Mobile / WhatsApp *</label><input type="text" name="user_phone" class="form-control" required></div>
+                    <div class="col-md-6">
+                        <label class="form-label fw-semibold">Car Type Needed *</label>
+                        <select name="car_type_needed" class="form-select" required>
+                            <option value="">Select Category</option>
+                            <option value="Sedan">Sedan (Dzire / Etios)</option>
+                            <option value="SUV">SUV (Scorpio / Innova)</option>
+                            <option value="Toto">Toto / E-Rickshaw</option>
+                            <option value="Pickup">Pickup / Goods Carrier</option>
+                            <option value="Traveler">Traveler / Bus</option>
+                        </select>
+                    </div>
+                    <div class="col-md-6">
+                        <label class="form-label fw-semibold">Driver Preference *</label>
+                        <select name="driver_needed" class="form-select" required>
+                            <option value="Yes (With Driver)">With Driver</option>
+                            <option value="No (Self Drive)">Without Driver</option>
+                        </select>
+                    </div>
+                    <div class="col-md-6"><label class="form-label fw-semibold">Duration (Days) *</label><input type="number" name="days_count" class="form-control" min="1" required></div>
+                    <div class="col-md-6"><label class="form-label fw-semibold">Travel Date *</label><input type="date" name="travel_date" class="form-control" required></div>
+                    <div class="col-md-6"><label class="form-label fw-semibold">Pickup Location *</label><input type="text" name="pickup_location" class="form-control" required></div>
+                    <div class="col-md-6"><label class="form-label fw-semibold">Drop Location *</label><input type="text" name="drop_location" class="form-control" required></div>
+                    <div class="col-md-12"><label class="form-label fw-semibold">Notes</label><input type="text" name="notes" class="form-control" placeholder="Extra requirements..."></div>
+                </div>
+                <div class="modal-footer"><button type="submit" class="btn btn-warning w-100 fw-bold py-2 text-dark">Submit Hire Request</button></div>
+            </form>
+        </div>
+    </div>
+</div>
+
+<!-- CAR OWNER LISTING MODAL -->
+<div class="modal fade" id="ownerModal" tabindex="-1">
+    <div class="modal-dialog modal-lg">
+        <div class="modal-content">
+            <div class="modal-header bg-success text-white">
+                <h5 class="modal-title fw-bold"><i class="fa-solid fa-car"></i> Car Owner Listing Form</h5>
+                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+            </div>
+            <form method="POST" action="/submit_car_request" enctype="multipart/form-data">
+                <div class="modal-body row g-3">
+                    <div class="col-md-6"><label class="form-label fw-semibold">Owner Name *</label><input type="text" name="owner_name" class="form-control" required></div>
+                    <div class="col-md-6"><label class="form-label fw-semibold">Owner Phone / WhatsApp (Used for Login) *</label><input type="text" name="phone" class="form-control" required></div>
+                    <div class="col-md-6">
+                        <label class="form-label fw-semibold">Vehicle Type *</label>
+                        <select name="car_type" class="form-select" required>
+                            <option value="">Select Type</option>
+                            <option value="Sedan">Sedan</option>
+                            <option value="SUV">SUV</option>
+                            <option value="Toto">Toto</option>
+                            <option value="Pickup">Pickup</option>
+                            <option value="Traveler">Traveler</option>
+                        </select>
+                    </div>
+                    <div class="col-md-6"><label class="form-label fw-semibold">Car Name / Model *</label><input type="text" name="car_name" class="form-control" placeholder="e.g. Maruti Dzire" required></div>
+                    <div class="col-md-6"><label class="form-label fw-semibold">Vehicle Number *</label><input type="text" name="vehicle_number" class="form-control" placeholder="WB-74..." required></div>
+                    <div class="col-md-6"><label class="form-label fw-semibold">Location / Stand *</label><input type="text" name="location" class="form-control" required></div>
+                    <div class="col-md-6"><label class="form-label fw-semibold">Rate Per Day (₹) *</label><input type="text" name="rate_per_day" class="form-control" required></div>
+                    <div class="col-md-6">
+                        <label class="form-label fw-semibold">Engagement Type *</label>
+                        <select name="engagement_type" class="form-select" required>
+                            <option value="For Hire (Daily)">For Hire (Daily / Per Trip)</option>
+                            <option value="Monthly Contract">Monthly Contract / Engagement</option>
+                        </select>
+                    </div>
+                    <div class="col-md-6">
+                        <label class="form-label fw-semibold">Driver Status *</label>
+                        <select name="driver_available" class="form-select" required>
+                            <option value="Yes (With Driver)">Driver Available with Car</option>
+                            <option value="Car Only">Car Only (Without Driver)</option>
+                        </select>
+                    </div>
+                    <div class="col-md-12"><label class="form-label fw-semibold">Car Photo</label><input type="file" name="photo" class="form-control" accept="image/*"></div>
+                </div>
+                <div class="modal-footer"><button type="submit" class="btn btn-success w-100 fw-bold py-2">Submit for Approval</button></div>
+            </form>
+        </div>
+    </div>
+</div>
+"""
+    + BASE_FOOT
+)
+
+FLEET_HTML = (
+    BASE_HTML
+    + """
+<div class="container my-4">
+    <!-- MARQUEE SCROLLING DIRECTLY ABOVE AVAILABLE CAR/TOTO/VAHICLE -->
+    <div class="service-marquee-bar d-flex align-items-center gap-3 mb-4">
+        <span class="marquee-badge"><i class="fa-solid fa-bullhorn me-1"></i>FUTURE COMPUTER</span>
+        <marquee behavior="scroll" direction="left" scrollamount="5" onmouseover="this.stop();" onmouseout="this.start();" class="fw-semibold small mb-0">
+            SOCIETY REGISTRATION (CLUB, PRY. SCHOOL, MANDIR, CHURCH, ETC.) &nbsp;&bull;&nbsp;
+            GST REGISTRATION &nbsp;&bull;&nbsp;
+            DIGITAL SIGNATURE &nbsp;&bull;&nbsp;
+            PAN (NEW, MINOR, CORRECTION APPLY) &nbsp;&bull;&nbsp;
+            VOTER (NEW / CORRECTION APPLY) &nbsp;&bull;&nbsp;
+            RATION CORRECTION &nbsp;&bull;&nbsp;
+            PVC PRINT &nbsp;&bull;&nbsp;
+            ITR &nbsp;&mdash;&nbsp;
+            AT FUTURE COMPUTER, BELOW SBI, BIRPARA (MOB: 9733-290-230 / 7001-158-084)
+        </marquee>
+    </div>
+
+    <div class="text-center mb-3">
+        <h2 class="fw-bold mb-1">Available Car/Toto/Vahicle</h2>
+        <p class="text-muted small mb-0">Compact list for fast finding &bull; Filter by vehicle category below</p>
+    </div>
+
+    <!-- CATEGORY FILTER BUTTONS -->
+    <div class="d-flex flex-wrap justify-content-center gap-2 mb-4" id="categoryFilterBar">
+        <button type="button" class="btn btn-outline-dark btn-sm fw-bold px-3 filter-btn active" data-filter="all">All Vehicles</button>
+        <button type="button" class="btn btn-outline-primary btn-sm fw-bold px-3 filter-btn" data-filter="toto"><i class="fa-solid fa-bolt me-1"></i>Toto</button>
+        <button type="button" class="btn btn-outline-success btn-sm fw-bold px-3 filter-btn" data-filter="4wheeler"><i class="fa-solid fa-car me-1"></i>4 Wheeler</button>
+        <button type="button" class="btn btn-outline-warning btn-sm fw-bold px-3 text-dark filter-btn" data-filter="pickup"><i class="fa-solid fa-truck-pickup me-1"></i>Pick Up</button>
+        <button type="button" class="btn btn-outline-info btn-sm fw-bold px-3 text-dark filter-btn" data-filter="traveler"><i class="fa-solid fa-van-shuttle me-1"></i>Traveler</button>
+        <button type="button" class="btn btn-outline-secondary btn-sm fw-bold px-3 filter-btn" data-filter="bus"><i class="fa-solid fa-bus me-1"></i>Bus</button>
+    </div>
+
+    <div class="row g-3" id="fleetList">
+        {% for c in cars %}
+        {% set t_lower = (c.car_type or '')|lower %}
+        {% set n_lower = (c.car_name or '')|lower %}
+        {% set combined = t_lower ~ ' ' ~ n_lower %}
+        {% if 'toto' in combined or 'rickshaw' in combined or 'e-rickshaw' in combined %}
+            {% set cat_key = 'toto' %}
+        {% elif 'pickup' in combined or 'pick up' in combined or 'goods' in combined %}
+            {% set cat_key = 'pickup' %}
+        {% elif 'traveler' in combined or 'traveller' in combined %}
+            {% set cat_key = 'traveler' %}
+        {% elif 'bus' in combined %}
+            {% set cat_key = 'bus' %}
+        {% else %}
+            {% set cat_key = '4wheeler' %}
+        {% endif %}
+        <div class="col-md-6 col-lg-4 fleet-item" data-cat="{{ cat_key }}">
+            <div class="card-custom p-3 h-100 d-flex flex-column">
+                <div class="d-flex justify-content-between align-items-start gap-2 mb-1">
+                    <div>
+                        <span class="badge bg-dark-subtle text-dark border mb-1">{{ c.car_type }}</span>
+                        <h5 class="fw-bold text-dark mb-0">{{ c.car_name }}</h5>
+                    </div>
+                    <span class="badge bg-{{ 'success' if c.status=='Available' else 'secondary' }}">{{ c.status }}</span>
+                </div>
+                <div class="small text-muted mb-1"><i class="fa-solid fa-id-card me-1"></i><strong>No:</strong> {{ c.vehicle_number }}</div>
+                <div class="small text-muted mb-1"><i class="fa-solid fa-user me-1"></i>{{ c.owner_name }} &bull; <i class="fa-solid fa-location-dot text-danger me-1"></i>{{ c.location }}</div>
+                <div class="small text-success fw-bold mb-2">Rate: ₹{{ c.rate_per_day }} / Day</div>
+                <div class="mt-auto pt-2 border-top d-flex gap-2">
+                    <a href="tel:{{ c.phone }}" class="btn btn-primary btn-sm flex-grow-1"><i class="fa-solid fa-phone"></i> Call</a>
+                    <a href="https://wa.me/{{ clean_phone_for_wa(c.phone) }}?text=Hello, I want to book your {{ c.car_name }} ({{ c.vehicle_number }})." target="_blank" class="btn btn-wa btn-sm flex-grow-1"><i class="fa-brands fa-whatsapp"></i> WhatsApp</a>
+                </div>
+            </div>
+        </div>
+        {% else %}
+        <div class="col-12 text-center py-5 text-muted"><h5>No approved cars in fleet.</h5></div>
+        {% endfor %}
+    </div>
+</div>
+
+<script>
+document.addEventListener("DOMContentLoaded", function() {
+    const buttons = document.querySelectorAll("#categoryFilterBar .filter-btn");
+    const items = document.querySelectorAll("#fleetList .fleet-item");
+
+    buttons.forEach(btn => {
+        btn.addEventListener("click", function() {
+            buttons.forEach(b => b.classList.remove("active"));
+            this.classList.add("active");
+
+            const filter = this.getAttribute("data-filter");
+            items.forEach(item => {
+                const cat = item.getAttribute("data-cat");
+                if (filter === "all" || cat === filter) {
+                    item.style.display = "";
+                } else {
+                    item.style.display = "none";
+                }
+            });
+        });
+    });
+});
+</script>
+"""
+    + BASE_FOOT
+)
+
+OWNER_LOGIN_HTML = (
+    BASE_HTML
+    + """
+<div class="container my-5" style="max-width: 420px;">
+    <div class="card-custom p-4">
+        <h4 class="text-center fw-bold mb-3"><i class="fa-solid fa-car-rear text-success"></i> Car Owner Portal Login</h4>
+        <p class="small text-muted text-center mb-4">Enter your registered mobile number to manage your vehicle status.</p>
+        <form method="POST" action="/owner_login">
+            <div class="mb-3"><input type="text" name="phone" class="form-control" placeholder="Enter Mobile Number" required></div>
+            <button type="submit" class="btn btn-success w-100 fw-bold">Login to Owner Dashboard</button>
+        </form>
+    </div>
+</div>
+"""
+    + BASE_FOOT
+)
+
+OWNER_DASH_HTML = (
+    BASE_HTML
+    + """
+<div class="container my-4" style="max-width: 800px;">
+    <div class="d-flex justify-content-between align-items-center mb-4">
+        <h3 class="fw-bold text-dark"><i class="fa-solid fa-gauge text-success"></i> Welcome, Owner ({{ owner_phone }})</h3>
+        <a href="/logout" class="btn btn-outline-danger btn-sm">Logout</a>
+    </div>
+
+    <div class="card-custom p-4">
+        <h5 class="fw-bold mb-3">Your Registered Vehicles &amp; Status Control</h5>
+        <div class="table-responsive">
+            <table class="table table-bordered align-middle text-center">
+                <thead class="table-dark"><tr><th>Car Model</th><th>Vehicle No.</th><th>Approval</th><th>Current Status</th><th>Change Status</th></tr></thead>
+                <tbody>
+                    {% for c in owner_cars %}
+                    <tr>
+                        <td class="fw-semibold text-start">{{ c.car_name }}<br><small class="text-muted">{{ c.car_type }}</small></td>
+                        <td>{{ c.vehicle_number }}</td>
+                        <td><span class="badge bg-{{ 'success' if c.admin_status=='Approved' else 'warning text-dark' }}">{{ c.admin_status }}</span></td>
+                        <td><span class="badge bg-{{ 'success' if c.status=='Available' else 'secondary' }}">{{ c.status }}</span></td>
+                        <td>
+                            {% if c.admin_status == 'Approved' %}
+                            <form method="POST" action="/owner/update_status/{{ c.id }}">
+                                <select name="status" class="form-select form-select-sm d-inline-block w-auto" onchange="this.form.submit()">
+                                    <option value="Available" {{ 'selected' if c.status=='Available' else '' }}>Available</option>
+                                    <option value="Not Available / On Trip" {{ 'selected' if c.status=='Not Available / On Trip' else '' }}>Not Available / Busy</option>
+                                </select>
+                            </form>
+                            {% else %}
+                            <small class="text-muted">Awaiting Admin Approval</small>
+                            {% endif %}
+                        </td>
+                    </tr>
+                    {% else %}
+                    <tr><td colspan="5" class="text-muted py-3">No cars registered with this phone number.</td></tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+"""
+    + BASE_FOOT
+)
+
+ADMIN_LOGIN_HTML = (
+    BASE_HTML
+    + """
+<div class="container my-5" style="max-width: 420px;">
+    <div class="card-custom p-4">
+        <h4 class="text-center fw-bold mb-3"><i class="fa-solid fa-user-shield text-primary"></i> Admin Dispatch Login</h4>
+        <form method="POST" action="/admin_login">
+            <div class="mb-3">
+                <label class="form-label fw-semibold text-muted small">Username</label>
+                <input type="text" name="username" class="form-control" placeholder="Enter username" autocomplete="off" required>
+            </div>
+            <div class="mb-3">
+                <label class="form-label fw-semibold text-muted small">Password</label>
+                <input type="password" name="password" class="form-control" placeholder="••••••••" required>
+            </div>
+            <button type="submit" class="btn btn-dark w-100 fw-bold">Login to Dispatch Panel</button>
+        </form>
+    </div>
+</div>
+"""
+    + BASE_FOOT
+)
+
+ADMIN_DASH_HTML = (
+    BASE_HTML
+    + """
+<div class="container my-4">
+    <div class="d-flex justify-content-between align-items-center mb-4">
+        <h3 class="fw-bold text-dark"><i class="fa-solid fa-sliders text-primary"></i> Admin Dispatch Panel</h3>
+        <a href="/logout" class="btn btn-outline-danger btn-sm">Logout</a>
+    </div>
+
+    <ul class="nav nav-pills mb-4 gap-2" id="adminTabs">
+        <li class="nav-item"><a class="nav-link active fw-bold" data-bs-toggle="pill" href="#requests_tab">Hire Requests ({{ requests|length }})</a></li>
+        <li class="nav-item"><a class="nav-link fw-bold" data-bs-toggle="pill" href="#fleet_requests_tab">Owner Requests ({{ pending_cars|length }})</a></li>
+        <li class="nav-item"><a class="nav-link fw-bold" data-bs-toggle="pill" href="#fleet_tab">Approved Fleet ({{ approved_cars|length }})</a></li>
+    </ul>
+
+    <div class="tab-content">
+        <!-- HIRE REQUESTS TAB -->
+        <div class="tab-pane fade show active" id="requests_tab">
+            <div class="card-custom p-4">
+                <h5 class="fw-bold mb-3">User Car Hire Requests &amp; Assignment</h5>
+                <div class="table-responsive">
+                    <table class="table table-bordered align-middle text-center">
+                        <thead class="table-dark"><tr><th>User Info</th><th>Requirement</th><th>Route &amp; Date</th><th>Status</th><th>Assign / Complete</th></tr></thead>
+                        <tbody>
+                            {% for r in requests %}
+                            <tr>
+                                <td class="text-start"><strong>{{ r.user_name }}</strong><br><a href="tel:{{ r.user_phone }}" class="small text-primary"><i class="fa-solid fa-phone"></i> {{ r.user_phone }}</a></td>
+                                <td><span class="badge bg-info text-dark">{{ r.car_type_needed }}</span><br><small>{{ r.days_count }} Days</small></td>
+                                <td class="text-start small"><strong>Pickup:</strong> {{ r.pickup_location }}<br><strong>Drop:</strong> {{ r.drop_location }}<br><strong>Date:</strong> {{ r.travel_date }}</td>
+                                <td>
+                                    <span class="badge bg-{{ 'success' if r.request_status=='Confirmed' else ('primary' if r.request_status=='Completed' else 'warning text-dark') }}">{{ r.request_status }}</span>
+                                    {% if r.assigned_car_name %}<br><small class="text-success fw-bold">Car: {{ r.assigned_car_name }}</small>{% endif %}
+                                    {% if r.request_status == 'Confirmed' and r.assigned_car_id %}
+                                    <form method="POST" action="/admin/complete_trip/{{ r.id }}" class="mt-1">
+                                        <button type="submit" class="btn btn-xs btn-sm btn-outline-primary py-0 px-2" style="font-size: 0.75rem;"><i class="fa-solid fa-flag-checkered"></i> Trip Completed</button>
+                                    </form>
+                                    {% endif %}
+                                </td>
+                                <td>
+                                    <form method="POST" action="/admin/assign_car/{{ r.id }}" class="d-flex flex-column gap-1">
+                                        <select name="car_id" class="form-select form-select-sm" required>
+                                            <option value="">-- Select Available Car --</option>
+                                            {% for c in approved_cars %}
+                                            {% if c.status == 'Available' %}
+                                            <option value="{{ c.id }}" {{ 'selected' if r.assigned_car_id == c.id else '' }}>{{ c.car_name }} ({{ c.vehicle_number }})</option>
+                                            {% endif %}
+                                            {% endfor %}
+                                        </select>
+                                        <button type="submit" class="btn btn-sm btn-success fw-bold">Assign &amp; Confirm</button>
+                                    </form>
+                                </td>
+                            </tr>
+                            {% else %}
+                            <tr><td colspan="5" class="text-muted py-3">No hire requests received.</td></tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+
+        <!-- CAR OWNER REQUESTS TAB -->
+        <div class="tab-pane fade" id="fleet_requests_tab">
+            <div class="card-custom p-4">
+                <h5 class="fw-bold mb-3">Car Owner Submission Requests</h5>
+                <div class="table-responsive">
+                    <table class="table table-bordered align-middle text-center">
+                        <thead class="table-dark"><tr><th>Car Model</th><th>Type &amp; Number</th><th>Owner &amp; Phone</th><th>Rate &amp; Location</th><th>Action</th></tr></thead>
+                        <tbody>
+                            {% for c in pending_cars %}
+                            <tr>
+                                <td class="fw-semibold text-start">{{ c.car_name }}</td>
+                                <td><span class="badge bg-warning text-dark">{{ c.car_type }}</span><br><small>{{ c.vehicle_number }}</small></td>
+                                <td>{{ c.owner_name }}<br><small>{{ c.phone }}</small></td>
+                                <td>₹{{ c.rate_per_day }}/day<br><small>{{ c.location }}</small></td>
+                                <td>
+                                    <div class="d-flex justify-content-center gap-2">
+                                        <form method="POST" action="/admin/update_car_status/{{ c.id }}">
+                                            <input type="hidden" name="status" value="Approved">
+                                            <button type="submit" class="btn btn-sm btn-success fw-bold">Approve</button>
+                                        </form>
+                                        <a href="/admin/delete_car/{{ c.id }}" class="btn btn-sm btn-danger fw-bold">Remove</a>
+                                    </div>
+                                </td>
+                            </tr>
+                            {% else %}
+                            <tr><td colspan="5" class="text-muted py-3">No pending owner requests.</td></tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+
+        <!-- APPROVED FLEET TAB -->
+        <div class="tab-pane fade" id="fleet_tab">
+            <div class="card-custom p-4">
+                <h5 class="fw-bold mb-3">Approved Fleet Management</h5>
+                <div class="table-responsive">
+                    <table class="table table-sm table-bordered align-middle text-center">
+                        <thead class="table-dark"><tr><th>Name</th><th>Type</th><th>Number</th><th>Owner Phone</th><th>Status</th><th>Action</th></tr></thead>
+                        <tbody>
+                            {% for c in approved_cars %}
+                            <tr>
+                                <td class="fw-semibold text-start">{{ c.car_name }}</td>
+                                <td>{{ c.car_type }}</td>
+                                <td>{{ c.vehicle_number }}</td>
+                                <td>{{ c.phone }}</td>
+                                <td>
+                                    <form method="POST" action="/admin/toggle_availability/{{ c.id }}" class="d-inline">
+                                        <select name="status" class="form-select form-select-sm d-inline-block w-auto" onchange="this.form.submit()">
+                                            <option value="Available" {{ 'selected' if c.status=='Available' else '' }}>Available</option>
+                                            <option value="Not Available / On Trip" {{ 'selected' if c.status=='Not Available / On Trip' else '' }}>Not Available / On Trip</option>
+                                        </select>
+                                    </form>
+                                </td>
+                                <td><a href="/admin/delete_car/{{ c.id }}" class="btn btn-sm btn-outline-danger">Remove</a></td>
+                            </tr>
+                            {% else %}
+                            <tr><td colspan="6" class="text-muted py-3">No approved cars in fleet.</td></tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+"""
+    + BASE_FOOT
+)
+
 
 # ---------------- ROUTES ---------------- #
-@app.route("/login", methods=["GET", "POST"])
-def login():
+
+
+@app.route("/")
+def index():
+    cars = Car.query.filter_by(admin_status="Approved").order_by(Car.id.desc()).all()
+    return render_template_string(INDEX_HTML, cars=cars)
+
+
+@app.route("/fleet")
+def fleet():
+    cars = Car.query.filter_by(admin_status="Approved").order_by(Car.id.desc()).all()
+    return render_template_string(FLEET_HTML, cars=cars)
+
+
+@app.route("/owner_login", methods=["GET", "POST"])
+def owner_login():
     if request.method == "POST":
-        if request.form.get("password") == ADMIN_PASSWORD:
-            session["admin_logged_in"] = True
-            return redirect(url_for("dashboard"))
-        else:
-            flash("ভুল পাসওয়ার্ড দিয়েছেন! আবার চেষ্টা করুন।", "danger")
-    return render_template_string(LOGIN_HTML)
+        phone = request.form.get("phone").strip()
+        cars = Car.query.filter_by(phone=phone).all()
+        if cars:
+            session["owner_phone"] = phone
+            return redirect(url_for("owner_dashboard"))
+        flash("No car found registered with this phone number!", "danger")
+    return render_template_string(OWNER_LOGIN_HTML)
+
+
+@app.route("/owner_dashboard")
+def owner_dashboard():
+    phone = session.get("owner_phone")
+    if not phone:
+        return redirect(url_for("owner_login"))
+    owner_cars = Car.query.filter_by(phone=phone).order_by(Car.id.desc()).all()
+    return render_template_string(
+        OWNER_DASH_HTML, owner_cars=owner_cars, owner_phone=phone
+    )
+
+
+@app.route("/owner/update_status/<int:car_id>", methods=["POST"])
+def owner_update_status(car_id):
+    phone = session.get("owner_phone")
+    if phone:
+        status = request.form.get("status")
+        car = Car.query.filter_by(id=car_id, phone=phone).first()
+        if car:
+            car.status = status
+            db.session.commit()
+            flash("Your car status updated successfully!", "success")
+    return redirect(url_for("owner_dashboard"))
+
+
+@app.route("/submit_request", methods=["POST"])
+def submit_request():
+    new_req = HireRequest(
+        user_name=request.form.get("user_name"),
+        user_phone=request.form.get("user_phone"),
+        car_type_needed=request.form.get("car_type_needed"),
+        driver_needed=request.form.get("driver_needed"),
+        pickup_location=request.form.get("pickup_location"),
+        drop_location=request.form.get("drop_location"),
+        travel_date=request.form.get("travel_date"),
+        days_count=int(request.form.get("days_count", 1)),
+        notes=request.form.get("notes", ""),
+        request_date=date.today().isoformat(),
+    )
+    db.session.add(new_req)
+    db.session.commit()
+    flash("Car hire request submitted successfully!", "success")
+    return redirect(url_for("index"))
+
+
+@app.route("/submit_car_request", methods=["POST"])
+def submit_car_request():
+    photo_path = ""
+    f_photo = request.files.get("photo")
+    if f_photo and f_photo.filename != "":
+        fname = f"car_{datetime.now().strftime('%Y%m%d%H%M%S')}_{f_photo.filename}"
+        photo_path = os.path.join(CAR_FOLDER, fname)
+        f_photo.save(photo_path)
+
+    try:
+        new_car = Car(
+            car_name=request.form.get("car_name"),
+            car_type=request.form.get("car_type"),
+            vehicle_number=request.form.get("vehicle_number"),
+            owner_name=request.form.get("owner_name"),
+            phone=request.form.get("phone"),
+            rate_per_day=request.form.get("rate_per_day"),
+            location=request.form.get("location"),
+            engagement_type=request.form.get("engagement_type"),
+            driver_available=request.form.get("driver_available"),
+            status="Available",
+            admin_status="Pending",
+            photo_path=photo_path,
+        )
+        db.session.add(new_car)
+        db.session.commit()
+        flash("Car listed successfully! Awaiting Admin approval.", "success")
+    except Exception:
+        db.session.rollback()
+        flash(
+            "Vehicle number already registered or database error occurred!",
+            "danger",
+        )
+    return redirect(url_for("index"))
+
+
+@app.route("/admin_login", methods=["GET", "POST"])
+def admin_login():
+    if request.method == "POST":
+        if (
+            request.form.get("username") == "admin"
+            and request.form.get("password") == "admin123"
+        ):
+            session["role"] = "admin"
+            return redirect(url_for("admin_dashboard"))
+        flash("Invalid Admin Credentials!", "danger")
+    return render_template_string(ADMIN_LOGIN_HTML)
+
+
+@app.route("/admin_dashboard")
+def admin_dashboard():
+    if session.get("role") != "admin":
+        return redirect(url_for("admin_login"))
+
+    pending_cars = (
+        Car.query.filter_by(admin_status="Pending").order_by(Car.id.desc()).all()
+    )
+    approved_cars = (
+        Car.query.filter_by(admin_status="Approved").order_by(Car.id.desc()).all()
+    )
+
+    requests = (
+        db.session.query(HireRequest, Car.car_name.label("assigned_car_name"))
+        .outerjoin(Car, HireRequest.assigned_car_id == Car.id)
+        .order_by(HireRequest.id.desc())
+        .all()
+    )
+
+    formatted_requests = []
+    for req, car_name in requests:
+        r_dict = {c.name: getattr(req, c.name) for c in req.__table__.columns}
+        r_dict["assigned_car_name"] = car_name
+        formatted_requests.append(r_dict)
+
+    return render_template_string(
+        ADMIN_DASH_HTML,
+        pending_cars=pending_cars,
+        approved_cars=approved_cars,
+        requests=formatted_requests,
+    )
+
+
+@app.route("/admin/update_car_status/<int:car_id>", methods=["POST"])
+def update_car_status(car_id):
+    if session.get("role") == "admin":
+        car = Car.query.get(car_id)
+        if car:
+            car.admin_status = request.form.get("status")
+            db.session.commit()
+            flash("Car approved successfully!", "success")
+    return redirect(url_for("admin_dashboard"))
+
+
+@app.route("/admin/toggle_availability/<int:car_id>", methods=["POST"])
+def toggle_availability(car_id):
+    if session.get("role") == "admin":
+        car = Car.query.get(car_id)
+        if car:
+            car.status = request.form.get("status")
+            db.session.commit()
+            flash("Status updated.", "info")
+    return redirect(url_for("admin_dashboard"))
+
+
+@app.route("/admin/assign_car/<int:req_id>", methods=["POST"])
+def assign_car(req_id):
+    if session.get("role") == "admin":
+        car_id = int(request.form.get("car_id"))
+        req = HireRequest.query.get(req_id)
+        car = Car.query.get(car_id)
+        if req and car:
+            req.assigned_car_id = car_id
+            req.request_status = "Confirmed"
+            car.status = "Not Available / On Trip"
+            db.session.commit()
+            flash("Car assigned successfully!", "success")
+    return redirect(url_for("admin_dashboard"))
+
+
+@app.route("/admin/complete_trip/<int:req_id>", methods=["POST"])
+def complete_trip(req_id):
+    if session.get("role") == "admin":
+        req = HireRequest.query.get(req_id)
+        if req and req.assigned_car_id:
+            car = Car.query.get(req.assigned_car_id)
+            if car:
+                car.status = "Available"
+            req.request_status = "Completed"
+            db.session.commit()
+            flash("Trip completed! Car is now Available.", "success")
+    return redirect(url_for("admin_dashboard"))
+
+
+@app.route("/admin/delete_car/<int:car_id>")
+def delete_car(car_id):
+    if session.get("role") == "admin":
+        car = Car.query.get(car_id)
+        if car:
+            db.session.delete(car)
+            db.session.commit()
+            flash("Car removed.", "info")
+    return redirect(url_for("admin_dashboard"))
 
 
 @app.route("/logout")
 def logout():
-    session.pop("admin_logged_in", None)
-    return redirect(url_for("login"))
-
-
-@app.route("/")
-def dashboard():
-    if not session.get("admin_logged_in"):
-        return redirect(url_for("login"))
-
-    all_societies = Society.query.order_by(Society.society_name.asc()).all()
-    pending_list = [s for s in all_societies if s.renewal_status != "Completed"]
-    completed_list = [s for s in all_societies if s.renewal_status == "Completed"]
-
-    return render_template_string(
-        DASHBOARD_HTML,
-        all_societies=all_societies,
-        pending_list=pending_list,
-        completed_list=completed_list,
-        total_count=len(all_societies),
-    )
-
-
-@app.route("/bulk_import", methods=["POST"])
-def bulk_import():
-    if not session.get("admin_logged_in"):
-        return redirect(url_for("login"))
-    try:
-        raw_text = request.form.get("bulk_names", "")
-        lines = [line.strip() for line in raw_text.splitlines() if line.strip()]
-        added_count = 0
-        
-        # ব্যাচ সাইজ সর্বোচ্চ ৫০টি করা হয়েছে যাতে 502 Bad Gateway এরর না আসে
-        batch_lines = lines[:50]
-        
-        for idx, line in enumerate(batch_lines, start=1):
-            clean_name = line.replace("\\", " ").replace("/", " ").strip()
-            if not clean_name:
-                continue
-                
-            existing = Society.query.filter_by(society_name=clean_name).first()
-            if not existing:
-                unique_code = uuid.uuid4().hex[:6].upper()
-                temp_reg = f"REG-{datetime.now().strftime('%H%M%S')}-{idx}-{unique_code}"
-                
-                new_soc = Society(
-                    society_name=clean_name,
-                    reg_number=temp_reg,
-                    renewal_status="Pending",
-                    updated_at=datetime.now().strftime("%Y-%m-%d"),
-                )
-                db.session.add(new_soc)
-                added_count += 1
-                
-        db.session.commit()
-        if added_count > 0:
-            flash(f"মোট {added_count}টি সোসাইটি সফলভাবে ইমপোর্ট হয়েছে! (বাকি থাকলে আবার ইমপোর্ট করুন)", "success")
-        else:
-            flash("যে নামগুলো দিয়েছেন সেগুলো ইতিমধ্যে ডাটাবেসে আছে অথবা খালি ছিল।", "warning")
-            
-    except Exception as e:
-        db.session.rollback()
-        flash(f"ইমপোর্ট করার সময় ডাটাবেসে সমস্যা হয়েছে: {str(e)}", "danger")
-        
-    return redirect(url_for("dashboard"))
-
-
-@app.route("/export_excel")
-def export_excel():
-    if not session.get("admin_logged_in"):
-        return redirect(url_for("login"))
-
-    si = StringIO()
-    cw = csv.writer(si)
-
-    cw.writerow([
-        "ID",
-        "Society Name",
-        "Registration Number",
-        "Registration Date",
-        "PAN Number",
-        "Bank Details",
-        "Registered Address",
-        "President Name",
-        "President Phone",
-        "Secretary Name",
-        "Secretary Phone",
-        "Renewal Status",
-        "Last Renewed FY",
-        "All Renewed Years History",
-    ])
-
-    societies = Society.query.order_by(Society.society_name.asc()).all()
-    for s in societies:
-        cw.writerow([
-            s.id,
-            s.society_name,
-            s.reg_number,
-            s.reg_date or "",
-            s.pan_number or "",
-            s.bank_details or "",
-            s.address or "",
-            s.president_name or "",
-            s.president_phone or "",
-            s.secretary_name or "",
-            s.secretary_phone or "",
-            s.renewal_status,
-            s.last_renewed_fy or "",
-            s.renewed_years or "",
-        ])
-
-    output = make_response(si.getvalue().encode("utf-8-sig"))
-    output.headers["Content-Disposition"] = (
-        "attachment; filename=WB_Societies_Renewal_Report.csv"
-    )
-    output.headers["Content-type"] = "text/csv; charset=utf-8-sig"
-    return output
-
-
-@app.route("/add_society", methods=["POST"])
-def add_society():
-    if not session.get("admin_logged_in"):
-        return redirect(url_for("login"))
-    try:
-        renewed_yrs = request.form.get("renewed_years", "").strip()
-        last_fy = (
-            renewed_yrs.split(",")[-1].strip() if renewed_yrs else get_current_fy()
-        )
-
-        new_soc = Society(
-            society_name=request.form.get("society_name").strip(),
-            reg_number=request.form.get("reg_number").strip(),
-            reg_date=request.form.get("reg_date", "").strip(),
-            pan_number=request.form.get("pan_number", "").strip().upper(),
-            bank_details=request.form.get("bank_details", "").strip(),
-            address=request.form.get("address", "").strip(),
-            president_name=request.form.get("president_name", "").strip(),
-            president_phone=request.form.get("president_phone", "").strip(),
-            secretary_name=request.form.get("secretary_name", "").strip(),
-            secretary_phone=request.form.get("secretary_phone", "").strip(),
-            renewed_years=renewed_yrs,
-            last_renewed_fy=last_fy if renewed_yrs else "",
-            renewal_status=request.form.get("renewal_status", "Pending"),
-            updated_at=datetime.now().strftime("%Y-%m-%d"),
-        )
-        db.session.add(new_soc)
-        db.session.commit()
-        flash(
-            f"'{new_soc.society_name}' সফলভাবে ক্লাউড ডাটাবেসে সেভ হয়েছে!",
-            "success",
-        )
-    except Exception as e:
-        db.session.rollback()
-        flash(
-            "এই Registration Number ইতিমধ্যে ডাটাবেসে আছে অথবা কোনো সমস্যা হয়েছে!",
-            "danger",
-        )
-    return redirect(url_for("dashboard"))
-
-
-@app.route("/edit/<int:id>", methods=["POST"])
-def edit_society(id):
-    if not session.get("admin_logged_in"):
-        return redirect(url_for("login"))
-    soc = Society.query.get_or_404(id)
-    try:
-        soc.society_name = request.form.get("society_name").strip()
-        soc.reg_number = request.form.get("reg_number").strip()
-        soc.reg_date = request.form.get("reg_date", "").strip()
-        soc.pan_number = request.form.get("pan_number", "").strip().upper()
-        soc.bank_details = request.form.get("bank_details", "").strip()
-        soc.address = request.form.get("address", "").strip()
-        soc.president_name = request.form.get("president_name", "").strip()
-        soc.president_phone = request.form.get("president_phone", "").strip()
-        soc.secretary_name = request.form.get("secretary_name", "").strip()
-        soc.secretary_phone = request.form.get("secretary_phone", "").strip()
-        soc.renewed_years = request.form.get("renewed_years", "").strip()
-        soc.renewal_status = request.form.get("renewal_status", "Pending")
-        if soc.renewed_years:
-            soc.last_renewed_fy = soc.renewed_years.split(",")[-1].strip()
-        db.session.commit()
-        flash("তথ্য সফলভাবে আপডেট করা হয়েছে!", "success")
-    except Exception as e:
-        db.session.rollback()
-        flash("আপডেট করার সময় সমস্যা হয়েছে!", "danger")
-    return redirect(url_for("dashboard"))
-
-
-@app.route("/mark_complete/<int:id>", methods=["POST"])
-def mark_complete(id):
-    if not session.get("admin_logged_in"):
-        return redirect(url_for("login"))
-    soc = Society.query.get_or_404(id)
-    fy = request.form.get("completed_fy", "").strip()
-
-    existing = [y.strip() for y in soc.renewed_years.split(",") if y.strip()]
-    if fy and fy not in existing:
-        existing.append(fy)
-
-    soc.renewed_years = ", ".join(existing)
-    soc.last_renewed_fy = fy
-    soc.renewal_status = "Completed"
-    db.session.commit()
-    flash(
-        f"'{soc.society_name}'-এর {fy} রিনিউয়াল Completed হিসেবে সেভ হয়েছে!",
-        "success",
-    )
-    return redirect(url_for("dashboard"))
-
-
-@app.route("/mark_pending/<int:id>")
-def mark_pending(id):
-    if not session.get("admin_logged_in"):
-        return redirect(url_for("login"))
-    soc = Society.query.get_or_404(id)
-    soc.renewal_status = "Pending"
-    db.session.commit()
-    flash(
-        f"'{soc.society_name}'-কে আবার Pending তালিকায় নেওয়া হয়েছে।",
-        "warning",
-    )
-    return redirect(url_for("dashboard"))
-
-
-@app.route("/reset_all_pending")
-def reset_all_pending():
-    if not session.get("admin_logged_in"):
-        return redirect(url_for("login"))
-    Society.query.update({Society.renewal_status: "Pending"})
-    db.session.commit()
-    flash(
-        "নতুন আর্থিক বছরের (After March) রিনিউয়াল সাইকেল শুরু হয়েছে—সব সোসাইটি এখন Pending লিস্টে!",
-        "info",
-    )
-    return redirect(url_for("dashboard"))
-
-
-@app.route("/delete/<int:id>")
-def delete_society(id):
-    if not session.get("admin_logged_in"):
-        return redirect(url_for("login"))
-    soc = Society.query.get_or_404(id)
-    db.session.delete(soc)
-    db.session.commit()
-    flash("সোসাইটি রেকর্ড ডিলিট করা হয়েছে।", "secondary")
-    return redirect(url_for("dashboard"))
+    session.clear()
+    return redirect(url_for("index"))
 
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5005, debug=True)
+    port = int(os.environ.get("PORT", 5002))
+    app.run(host="0.0.0.0", port=port, debug=False)
